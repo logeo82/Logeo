@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, session, send_from_directory
 import sqlite3, os, csv, io, hashlib
 from datetime import datetime
+from waitress import serve
 BASE=os.path.dirname(__file__); DB=os.path.join(BASE,'logeo.db')
 app=Flask(__name__,static_folder='static'); app.secret_key=os.environ.get('LOGEO_SECRET','change-this-secret')
 def db():
@@ -98,4 +99,4 @@ def import_csv():
   try:c.execute('INSERT OR IGNORE INTO listings(title,city,price,surface,type,distance_km,furnished,available_date,source,source_url,description,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(r['title'],r['city'],float(r['price']),float(r.get('surface') or 0),r.get('type',''),float(r.get('distance_km') or 0),1 if str(r.get('furnished','')).lower() in ('1','true','yes','oui') else 0,r.get('available_date'),r.get('source','import'),r.get('source_url'),r.get('description',''),datetime.utcnow().isoformat()));count+=1
   except Exception:pass
  c.commit();c.close();return jsonify(imported=count)
-if __name__=='__main__': app.run(host='0.0.0.0',port=int(os.environ.get('PORT',5000)))
+if __name__=='__main__': serve(app,host='0.0.0.0',port=int(os.environ.get('PORT',5000)))
