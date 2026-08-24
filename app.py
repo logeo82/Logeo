@@ -2,7 +2,9 @@ from flask import Flask, request, jsonify, session, send_from_directory
 import sqlite3, os, csv, io, hashlib
 from datetime import datetime
 from waitress import serve
-BASE=os.path.dirname(__file__); DB=os.path.join(BASE,'logeo.db')
+BASE=os.path.dirname(__file__); DATA_DIR=os.environ.get('LOGEO_DATA_DIR','/data')
+if not os.path.isdir(DATA_DIR): DATA_DIR=BASE
+DB=os.path.join(DATA_DIR,'logeo.db')
 app=Flask(__name__,static_folder='static'); app.secret_key=os.environ.get('LOGEO_SECRET','change-this-secret')
 def db():
  c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; return c
