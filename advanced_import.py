@@ -1,4 +1,4 @@
-import os, json, urllib.request
+import os, json, urllib.request, urllib.parse
 from flask import request, jsonify
 import app as logeo
 
@@ -7,7 +7,7 @@ CT_BASE='https://cherchertrouver.immo/api/v1'
 
 def _ct(path, params):
  if not CT_KEY: raise ValueError('CHERCHER_TROUVER_API_KEY est absente de Railway')
- qs='&'.join(f'{k}={urllib.parse.quote(str(v))}' for k,v in params.items() if v not in (None,''))
+ qs=urllib.parse.urlencode({k:v for k,v in params.items() if v not in (None,'')}, doseq=True)
  req=urllib.request.Request(f'{CT_BASE}{path}?{qs}',headers={'X-Api-Key':CT_KEY,'Accept':'application/json','User-Agent':'LOGEO/1.0'})
  with urllib.request.urlopen(req,timeout=30) as r:return json.loads(r.read().decode())
 
@@ -28,7 +28,7 @@ def market_detail(source,reference):
  try:
   u=logeo.user()
   if not u or u.get('role')!='owner':return jsonify(error='Connexion propriétaire requise'),403
-  data=_ct(f'/annonces/{source}/{urllib.parse.quote(reference,safe="")}',{})
+  data=_ct(f'/annonces/{urllib.parse.quote(source,safe="")}/{urllib.parse.quote(reference,safe="")}',{})
   return jsonify(ok=True,**data)
  except Exception as e:return jsonify(error=f'Détail annonce : {e}'),422
 
