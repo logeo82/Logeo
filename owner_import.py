@@ -14,129 +14,103 @@ class _Parser(HTMLParser):
         a=dict(attrs)
         if tag=='meta':
             key=(a.get('property') or a.get('name') or '').lower()
-            if key: self.meta[key]=a.get('content','')
-        elif tag=='title': self._buf=[]
-        elif tag=='script' and a.get('type','').lower()=='application/ld+json': self._json=True; self._buf=[]
+            if key:self.meta[key]=a.get('content','')
+        elif tag=='title':self._buf=[]
+        elif tag=='script' and a.get('type','').lower()=='application/ld+json':self._json=True;self._buf=[]
     def handle_endtag(self, tag):
-        if tag=='title' and self._buf:
-            self.meta['title']=''.join(self._buf).strip(); self._buf=[]
+        if tag=='title' and self._buf:self.meta['title']=''.join(self._buf).strip();self._buf=[]
         elif tag=='script' and self._json:
             raw=''.join(self._buf).strip()
             if raw:
                 try:self.jsonld.append(json.loads(raw))
                 except Exception:pass
-            self._json=False; self._buf=[]
-    def handle_data(self, data):
+            self._json=False;self._buf=[]
+    def handle_data(self,data):
         if self._json or 'title' not in self.meta:self._buf.append(data)
 
 def _walk(x):
     if isinstance(x,dict):
         yield x
-        for v in x.values(): yield from _walk(v)
+        for v in x.values():yield from _walk(v)
     elif isinstance(x,list):
-        for v in x: yield from _walk(v)
+        for v in x:yield from _walk(v)
 
 def _number(v):
     if v is None:return None
+    if isinstance(v,(int,float)):return float(v)
     m=re.search(r'([0-9][0-9 .\u00a0]*)(?:[,\.]([0-9]+))?',str(v))
     if not m:return None
     a=m.group(1).replace(' ','').replace('\u00a0','').replace('.','')
     try:return float(a+(('.'+m.group(2)) if m.group(2) else ''))
     except:return None
 
-def _find_price(text):
-    if not text:return None
-    patterns=[
-        r'(?i)["\'](?:price|prix|rent|monthlyRent|monthly_rent|amount|value)["\']\s*[:=]\s*["\']?([0-9][0-9 .\u00a0]*)',
-        r'(?i)(?:price|prix|rent|monthlyRent|monthly_rent|amount)\s*[:=]\s*\{[^}]{0,120}?["\']?value["\']?\s*[:=]\s*["\']?([0-9][0-9 .\u00a0]*)',
-        r'(?i)([0-9][0-9 .\u00a0]{2,})\s*(?:€|EUR|euros)(?:\s*(?:/|par)\s*mois)?',
-        r'(?i)(?:loyer|prix)\s*(?:mensuel)?[^0-9]{0,30}([0-9][0-9 .\u00a0]{2,})\s*(?:€|EUR|euros)'
-    ]
-    for pat in patterns:
-        m=re.search(pat,text)
-        if m:
-            n=_number(m.group(1))
-            if n and 100 <= n <= 10000000:return n
+def _find_key(x,keys):
+    for o in _walk(x):
+        if isinstance(o,dict):
+            for k in keys:
+                if k in o and o[k] not in (None,'',[]):
+                    n=_number(o[k])
+                    if n is not None:return n
     return None
 
 def _canonical_url(url):
-    p=urlparse(url)
-    return f'{p.scheme.lower()}://{p.netloc.lower()}{p.path.rstrip("/")}'
+    p=urlparse(url);return f'{p.scheme.lower()}://{p.netloc.lower()}{p.path.rstrip("/")}'
 
-def _bienici_structured(url):
-    """Use Bien'ici's own public structured listing endpoint instead of page metadata."""
+def _fetch_json(url):
+    req=Request(url,headers={'User-Agent':'Mozilla/5.0','Accept':'application/json,text/plain,*/*','Referer':'https://www.bienici.com/'})
+    with urlopen(req,timeout=20) as r:return json.loads(r.read().decode('utf-8','ignore'))
+
+def _bienici_detail(url):
     p=urlparse(url)
-    if 'bienici.com' not in p.netloc.lower(): return None
-    parts=[x for x in p.path.split('/') if x]
-    if len(parts)<4:return None
-    ad_id=parts[-1]
-    transaction='rent' if 'location' in parts else ('buy' if 'vente' in parts else None)
-    filters={'size':24,'from':0,'page':1,'onTheMarket':[True]}
-    if transaction:filters['filterType']=transaction
-    if 'appartement' in parts:filters['propertyType']=['flat']
-    elif 'maison' in parts:filters['propertyType']=['house']
-    elif 'parking' in parts:filters['propertyType']=['parking']
-    elif 'terrain' in parts:filters['propertyType']=['land']
-    filters['queryString']=ad_id
-    headers={'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/151 Safari/537.36','Accept':'application/json,text/plain,*/*','Accept-Language':'fr-FR,fr;q=0.9','Referer':url,'X-Requested-With':'XMLHttpRequest'}
-    try:
-        api=Request('https://www.bienici.com/realEstateAds.json?filters='+__import__('urllib.parse').parse.quote(json.dumps(filters,separators=(',',':')))+'&extensionType=extendedIfNoResult&leadingCount=2',headers=headers)
-        with urlopen(api,timeout=20) as r:data=json.loads(r.read().decode('utf-8','ignore'))
-        ads=data.get('realEstateAds') or []
-        exact=next((a for a in ads if str(a.get('id',''))==ad_id),None)
-        if not exact and ads and len(ads)==1: exact=ads[0]
-        if exact and exact.get('price') is not None:
-            return exact
-    except Exception:
-        pass
+    if 'bienici.com' not in p.netloc.lower():return None
+    slug=p.path.rstrip('/').split('/')[-1]
+    if not slug:return None
+    # Bien'ici exposes individual ad data through this public detail endpoint.
+    for endpoint in ('https://www.bienici.com/realEstateAd.json?id='+slug,
+                     'https://www.bienici.com/realEstateAds-one.json?onlyRealEstateAd='+slug):
+        try:
+            data=_fetch_json(endpoint)
+            objs=list(_walk(data))
+            ad=next((o for o in objs if isinstance(o,dict) and any(k in o for k in ('price','monthlyRent','surfaceArea','adId'))),None)
+            if not ad:continue
+            price=_number(ad.get('price')) or _number(ad.get('monthlyRent'))
+            if price is None:
+                price=_find_key(data,('price','monthlyRent','rent','amount'))
+            if price is None:continue
+            surface=_number(ad.get('surfaceArea')) or _number(ad.get('surface')) or _find_key(ad,('surfaceArea','surface')) or 0
+            city=ad.get('city') or ad.get('cityName') or ''
+            title=ad.get('title') or ad.get('description') or 'Annonce Bien’ici'
+            desc=ad.get('description') or ''
+            typ=ad.get('propertyType') or 'Appartement'
+            return {'title':str(title).strip(),'city':str(city).strip() or 'Montauban','price':price,'surface':surface,'type':str(typ),'furnished':1 if re.search(r'(?i)meubl',str(ad)) else 0,'description':str(desc)[:5000],'source':'bienici.com','source_url':_canonical_url(url)}
+        except Exception:
+            continue
     return None
 
 def parse_url(url):
     p=urlparse(url)
     if p.scheme not in ('http','https'):raise ValueError('URL invalide')
-    structured=_bienici_structured(url)
-    if structured:
-        title=structured.get('title') or 'Annonce immobilière'
-        city=structured.get('city') or (structured.get('district') or {}).get('name') or 'Montauban'
-        desc=structured.get('description') or ''
-        price=_number(structured.get('price'))
-        surface=_number(structured.get('surfaceArea'))
-        typ='Appartement' if structured.get('propertyType')=='flat' else ('Maison' if structured.get('propertyType')=='house' else 'Appartement')
-        furnished=1 if structured.get('isFurnished') else 0
-        if price is not None:
-            return {'title':title.strip(),'city':city.strip(),'price':price,'surface':surface or 0,'type':typ,'furnished':furnished,'description':re.sub('<[^>]+>',' ',desc).strip()[:5000],'source':'bienici.com','source_url':_canonical_url(url)}
+    # Bien'ici: use its structured detail endpoint first, not HTML metadata.
+    if 'bienici.com' in p.netloc.lower():
+        detail=_bienici_detail(url)
+        if detail:return detail
     req=Request(url,headers={'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/151 Safari/537.36','Accept-Language':'fr-FR,fr;q=0.9,en;q=0.8','Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'})
     try:
-        with urlopen(req,timeout=20) as r: raw=r.read(6000000)
-    except Exception as e:
-        raise ValueError(f'Impossible d’accéder au site ({type(e).__name__}). Le site peut bloquer les robots.')
-    text=raw.decode('utf-8','ignore'); q=_Parser(); q.feed(text)
+        with urlopen(req,timeout=20) as r:raw=r.read(6000000)
+    except Exception as e:raise ValueError(f'Impossible d’accéder au site ({type(e).__name__}). Le site peut bloquer les robots.')
+    text=raw.decode('utf-8','ignore');q=_Parser();q.feed(text)
     objs=[o for j in q.jsonld for o in _walk(j)]
     obj=next((o for o in objs if isinstance(o,dict) and (o.get('@type') in ('Apartment','SingleFamilyResidence','Residence','Offer') or 'price' in o or 'offers' in o)),{})
     offers=obj.get('offers') if isinstance(obj.get('offers'),dict) else {}
     title=obj.get('name') or q.meta.get('og:title') or q.meta.get('twitter:title') or q.meta.get('title')
     desc=obj.get('description') or q.meta.get('description') or q.meta.get('og:description') or ''
     price=_number(offers.get('price') or obj.get('price') or q.meta.get('product:price:amount'))
-    if price is None: price=_find_price(text)
-    fs=obj.get('floorSize'); surface=_number(fs.get('value') if isinstance(fs,dict) else fs) or _number(obj.get('surface')) or _number(obj.get('area'))
-    if surface is None:
-        m=re.search(r'(?i)(?:surface|area|m²|m2)[^0-9]{0,30}([0-9]{1,4}(?:[,.][0-9]+)?)',text[:500000])
-        surface=_number(m.group(1)) if m else None
-    address=obj.get('address'); address=address if isinstance(address,dict) else {}
-    city=address.get('addressLocality') or q.meta.get('addresslocality')
-    if not city:
-        m=re.search(r'\b(montauban|toulouse|albi|caussade|castelsarrasin)\b',text,re.I); city=m.group(1).title() if m else 'Montauban'
-    low=(title or '')+' '+desc+' '+text[:120000]
-    rooms=_number(obj.get('numberOfRooms') or obj.get('numberOfBedrooms'))
-    if re.search(r'\bstudio\b',low,re.I) or rooms==1: typ='Studio'
-    elif re.search(r'\bT1\b',low,re.I): typ='T1'
-    elif re.search(r'\bT2\b',low,re.I) or rooms==2: typ='T2'
-    elif re.search(r'\bcolocation\b',low,re.I): typ='Colocation'
-    else: typ='Appartement'
-    furnished=1 if re.search(r'\bmeubl[ée]|furnished\b',low,re.I) else 0
-    if not title:title=f'{typ} à louer - {city}'
-    if price is None:raise ValueError('Le prix de cette annonce n’est pas exposé dans les métadonnées ni dans les données structurées accessibles.')
-    return {'title':title.strip(),'city':city.strip(),'price':price,'surface':surface or 0,'type':typ,'furnished':furnished,'description':desc.strip()[:5000],'source':p.netloc.lower().replace('www.',''),'source_url':_canonical_url(url)}
+    fs=obj.get('floorSize');surface=_number(fs.get('value') if isinstance(fs,dict) else fs) or _number(obj.get('surface')) or _number(obj.get('area')) or 0
+    address=obj.get('address');address=address if isinstance(address,dict) else {}
+    city=address.get('addressLocality') or q.meta.get('addresslocality') or 'Montauban'
+    typ='Appartement'
+    if price is None:raise ValueError('Le portail ne fournit pas le prix dans ses données publiques accessibles à LOGEO. Un connecteur compatible est nécessaire.')
+    return {'title':(title or f'Appartement à louer - {city}').strip(),'city':city.strip(),'price':price,'surface':surface,'type':typ,'furnished':1 if re.search(r'(?i)meubl',(title or '')+' '+desc) else 0,'description':desc.strip()[:5000],'source':p.netloc.lower().replace('www.',''),'source_url':_canonical_url(url)}
 
 @logeo.app.post('/api/import-url')
 def import_url():
@@ -144,32 +118,16 @@ def import_url():
         u=logeo.user()
         if not u:return jsonify(error='Connexion requise'),401
         if u['role']!='owner':return jsonify(error='Import réservé aux propriétaires / agences'),403
-        payload=request.get_json(silent=True) or {}
-        url=str(payload.get('url') or '').strip()
+        payload=request.get_json(silent=True) or {};url=str(payload.get('url') or '').strip()
         if not url:return jsonify(error='Colle le lien de l’annonce'),400
-        data=parse_url(url)
-        c=logeo.db()
+        data=parse_url(url);c=logeo.db()
         try:
-            canonical=data['source_url']
-            existing=None
+            canonical=data['source_url'];existing=None
             for row in c.execute('SELECT * FROM listings WHERE source_url IS NOT NULL').fetchall():
-                if _canonical_url(str(row['source_url']))==canonical:
-                    existing=row; break
+                if _canonical_url(str(row['source_url']))==canonical:existing=row;break
             if existing:return jsonify(ok=True,duplicate=True,listing=dict(existing))
             cur=c.execute('INSERT INTO listings(title,city,price,surface,type,distance_km,furnished,available_date,source,source_url,description,owner_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(data['title'],data['city'],data['price'],data['surface'],data['type'],0,data['furnished'],None,data['source'],canonical,data['description'],u['id'],datetime.utcnow().isoformat()))
-            c.commit(); row=c.execute('SELECT * FROM listings WHERE id=?',(cur.lastrowid,)).fetchone()
-            return jsonify(ok=True,duplicate=False,listing=dict(row))
+            c.commit();row=c.execute('SELECT * FROM listings WHERE id=?',(cur.lastrowid,)).fetchone();return jsonify(ok=True,duplicate=False,listing=dict(row))
         finally:c.close()
-    except ValueError as e:
-        return jsonify(error=str(e)),422
-    except Exception as e:
-        return jsonify(error=f'Erreur LOGEO pendant l’import : {type(e).__name__}'),500
-
-_original_home=logeo.app.view_functions.get('home')
-def _home_with_import():
-    html=_original_home()
-    block='''<div id="ownerUrlImport" class="card" style="border:2px solid #dbe4ff;background:#f8faff"><h3>🔗 Importer une annonce</h3><p class="muted">Colle le lien public d’une annonce Bien’ici, SeLoger, etc. LOGEO récupérera les informations disponibles.</p><div class="grid"><label>Lien de l’annonce<input id="ownerImportUrl" type="url" placeholder="https://www.bienici.com/annonce/..."></label><div style="display:flex;align-items:end"><button type="button" onclick="logeoImportUrl()">📥 Importer automatiquement</button></div></div><p id="ownerImportMsg"></p></div>'''
-    html=html.replace('<h3>Nouvelle annonce</h3>',block+'<h3>Nouvelle annonce</h3>',1)
-    js='''<script>async function logeoImportUrl(){const i=document.getElementById("ownerImportUrl"),m=document.getElementById("ownerImportMsg"),b=i&&i.value.trim();if(!b){m.textContent="Colle d’abord le lien de l’annonce.";m.className="err";return}m.textContent="Import de l’annonce en cours…";m.className="muted";try{const r=await fetch("/api/import-url",{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json"},body:JSON.stringify({url:b})});const raw=await r.text();let x;try{x=JSON.parse(raw)}catch(_){throw Error("Réponse serveur invalide (HTTP "+r.status+"). Le serveur LOGEO doit être redéployé.")}if(!r.ok)throw Error(x.error||"Import impossible");m.textContent=x.duplicate?"Cette annonce est déjà dans tes annonces.":"✅ Annonce importée dans Mes annonces !";m.className="ok";i.value="";if(typeof loadOwner==="function")loadOwner()}catch(e){m.textContent="❌ "+e.message;m.className="err"}}</script>'''
-    return html.replace('</body>',js+'</body>',1)
-if _original_home: logeo.app.view_functions['home']=_home_with_import
+    except ValueError as e:return jsonify(error=str(e)),422
+    except Exception as e:return jsonify(error=f'Erreur LOGEO pendant l’import : {type(e).__name__}'),500
