@@ -24,6 +24,44 @@ function addOwnerImporter(){
  };
  return true;
 }
-function boot(){addOwnerImporter();const obs=new MutationObserver(function(){if(addOwnerImporter())obs.disconnect()});obs.observe(document.body,{childList:true,subtree:true});setTimeout(function(){obs.disconnect();addOwnerImporter()},30000)}
+
+// Pont propriétaire -> même fiche détaillée que côté étudiant.
+// On ne modifie pas l'importateur ni son API : on remplace seulement le rendu
+// des « Mes annonces » par des cartes cliquables utilisant openListingDetail().
+function loadOwnerDetailScript(){
+ if(window.openListingDetail) return Promise.resolve();
+ return new Promise(function(resolve,reject){
+  const s=document.createElement('script'); s.src='/static/detail.js?v=owner-detail-1';
+  s.onload=resolve; s.onerror=reject; document.head.appendChild(s);
+ });
+}
+async function wireOwnerListings(){
+ const box=document.getElementById('myListings');
+ if(!box || box.dataset.detailWired==='1') return;
+ try{
+  const x=await fetch('/api/owner/listings',{credentials:'same-origin',headers:{Accept:'application/json'}}).then(r=>r.json());
+  const listings=Array.isArray(x.listings)?x.listings:[];
+  if(!listings.length){box.dataset.detailWired='1';return;}
+  await loadOwnerDetailScript();
+  window.allMatches=listings.map(function(l){return Object.assign({score:100,reasons:[],photos:[]},l);});
+  box.innerHTML='<div class="card"><h2>📢 Mes annonces</h2>'+listings.map(function(l){
+   return '<button type="button" class="secondary logeo-owner-listing" data-owner-listing="'+String(l.id).replace(/"/g,'&quot;')+'" style="display:block;width:100%;text-align:left;margin:10px 0;padding:15px">🏠 <b>'+escapeHtml(l.title||'Annonce')+'</b><br><span class="muted">'+escapeHtml(l.price||'')+' € — '+escapeHtml(l.city||'')+'</span><br><small>👉 Ouvrir la fiche LOGEO</small></button>';
+  }).join('')+'</div>';
+  box.querySelectorAll('[data-owner-listing]').forEach(function(b){b.onclick=function(){window.allMatches=listings.map(function(l){return Object.assign({score:100,reasons:[],photos:[]},l);});window.openListingDetail(Number(b.dataset.ownerListing));};});
+  box.dataset.detailWired='1';
+ }catch(e){/* on laisse l'affichage propriétaire normal si le pont échoue */}
+}
+function escapeHtml(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function boot(){
+ addOwnerImporter();
+ const obs=new MutationObserver(function(){
+  if(addOwnerImporter()){
+   const box=document.getElementById('myListings');
+   if(box && box.innerHTML.trim() && box.dataset.detailWired!=='1') wireOwnerListings();
+  }
+ });
+ obs.observe(document.body,{childList:true,subtree:true});
+ setTimeout(function(){obs.disconnect();addOwnerImporter();wireOwnerListings()},30000);
+}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 })();
