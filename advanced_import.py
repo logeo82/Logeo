@@ -2,6 +2,7 @@ import os, json
 from flask import request, jsonify
 import app as logeo
 from ai_listing_normalizer import normalize_listing
+from owner_import import parse_url
 
 APIFY_TOKEN=os.environ.get('APIFY_API_TOKEN')
 APIFY_ACTOR='memo23~seloger-scraper'
@@ -43,6 +44,36 @@ def _photos(x):
 def _normalize(x,url):
  return {'title':_first(x,'title','headline','titre_annonce',default='Annonce immobilière'),'city':_first(x,'city','ville','addressCity','address_city'),'postal_code':_first(x,'postalCode','postcode','postal_code','zipCode','code_postal'),'district':_first(x,'neighborhood','district','quartier'),'address':_first(x,'address','street','streetAddress'),'price':_first(x,'price','prix','rent','salePrice',default=0),'surface':_first(x,'livingArea','surfaceM2','surface','surface_m2','areaSqm',default=0),'rooms':_first(x,'rooms','nb_pieces','nb_rooms',default=0),'bedrooms':_first(x,'bedrooms','nb_chambres',default=0),'floor':_first(x,'floor','etage'),'type':_first(x,'propertyType','property_type','type_bien',default='Appartement'),'description':_first(x,'description','descriptionText'),'furnished':bool(_first(x,'furnished','meuble',default=False)),'dpe':_first(x,'dpeRating','dpeClass','energyClass','dpe_classe','dpe'),'ges':_first(x,'gesRating','gesClass','ges_classe','ges'),'heating':_first(x,'heatingType','heating_type'),'features':_first(x,'features','amenities','amenities_str',default=[]),'latitude':_first(x,'latitude','lat',default=None),'longitude':_first(x,'longitude','lng','lon',default=None),'agency':_first(x,'agencyName','agency_name'),'transaction_type':_first(x,'transactionType','transaction_type'),'price_per_m2':_first(x,'pricePerM2','price_per_m2',default=None),'photos':_photos(x),'source_url':_first(x,'url','listingUrl',default=url),'source':'seloger.com'}
 
+def _raw(url):
+ # First try the existing parser that already works with normal public pages.
+ try:
+  data=parse_url(url)
+  if isinstance(data,dict) and data.get('title') and data.get('price') not in (None,'',0):
+   if isinstance(data.get('photos'),str):
+    try:data['photos']=json.loads(data['photos'])
+    except Exception:data['photos']=[]
+   data['source_url']=data.get('source_url') or url
+   return data
+ except Exception as first_error:
+  if not APIFY_TOKEN: raise first_error
+ # Only use Apify as a fallback; an empty Apify dataset is not a fatal error by itself.
+ if APIFY_TOKEN:
+  data=_normalize(_apify(url),url)
+  if data.get('title') or data.get('price') or data.get('description'): return data
+ raise ValueError('Impossible de récupérer cette annonce. Le site ne renvoie pas suffisamment de données publiques.')
+
+def _ai(raw):
+ try:
+  out=normalize_listing(raw)
+  if not isinstance(out,dict): return raw
+  # The AI may correct wording, but never replace verified source values or photos.
+  for k in ('city','postal_code','address','latitude','longitude','price','surface','rooms','bedrooms'):
+   if raw.get(k) not in (None,'',0,[]): out[k]=raw[k]
+  out['photos']=raw.get('photos',[])
+  out['source_url']=raw.get('source_url') or raw.get('source_url')
+  return out
+ except Exception:return raw
+
 @logeo.app.post('/api/import-preview')
 def import_preview():
  try:
@@ -52,11 +83,6 @@ def import_preview():
   url=str((request.get_json(silent=True) or {}).get('url') or '').strip()
   if not url:return jsonify(error='Colle le lien de l’annonce'),400
   if 'seloger.com' not in url.lower():return jsonify(error='Pour cet importateur, utilise un lien SeLoger.'),400
-  if not APIFY_TOKEN:return jsonify(error='APIFY_API_TOKEN est absent de Railway'),500
-  raw=_normalize(_apify(url),url)
-  try: preview=normalize_listing(raw)
-  except Exception: preview=raw
-  if not preview.get('photos'): preview['photos']=raw['photos']
-  if not preview.get('source_url'): preview['source_url']=url
-  return jsonify(ok=True,preview=preview)
+  raw=_raw(url)
+  return jsonify(ok=True,preview=_ai(raw))
  except Exception as e:return jsonify(error=f'Import SeLoger : {e}'),422
