@@ -86,6 +86,7 @@ def register_import_route(app, db, user_fn):
     def import_url():
         u=user_fn()
         if not u:return jsonify(error='Connexion requise'),401
+        if u.get('role')!='owner':return jsonify(error='L’import d’annonces est réservé aux propriétaires / agences.'),403
         x=request.json or {}; url=(x.get('url') or '').strip()
         if not url:return jsonify(error='URL manquante'),400
         try:data=parse_listing(url)
@@ -94,9 +95,21 @@ def register_import_route(app, db, user_fn):
         if existing:
             c.close(); return jsonify(ok=True,duplicate=True,listing=dict(existing))
         now=datetime.utcnow().isoformat()
-        cur=c.execute('INSERT INTO listings(title,city,price,surface,type,distance_km,furnished,available_date,source,source_url,description,owner_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(data['title'],data['city'],data['price'],data['surface'],data['type'],0,data['furnished'],data['available_date'],data['source'],data['source_url'],data['description'],u['id'] if u['role']=='owner' else None,now)); c.commit(); lid=cur.lastrowid
+        cur=c.execute('INSERT INTO listings(title,city,price,surface,type,distance_km,furnished,available_date,source,source_url,description,owner_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(data['title'],data['city'],data['price'],data['surface'],data['type'],0,data['furnished'],data['available_date'],data['source'],data['source_url'],data['description'],u['id'],now)); c.commit(); lid=cur.lastrowid
         row=c.execute('SELECT * FROM listings WHERE id=?',(lid,)).fetchone(); c.close()
         return jsonify(ok=True,duplicate=False,listing=dict(row))
+    @app.after_request
+    def inject_owner_importer(response):
+        try:
+            if response.content_type and response.content_type.startswith('text/html'):
+                page=response.get_data(as_text=True)
+                if 'id="ownerApp"' in page and 'id="ownerImportBox"' not in page and '<h3>Nouvelle annonce</h3>' in page:
+                    block='''<div id="ownerImportBox" class="card" style="border:2px solid #d6dbe5"><h3>🔗 Importer une annonce depuis une URL</h3><p class="muted">Colle le lien public d’une annonce Bien’ici ou d’un autre site immobilier.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><input id="ownerImportUrl" type="url" placeholder="https://www.bienici.com/annonce/..." style="flex:1;min-width:220px"><button id="ownerImportBtn" type="button">📥 Importer automatiquement</button></div><p id="ownerImportMsg"></p></div>\n<script>(function(){var b=document.getElementById('ownerImportBtn');if(!b)return;b.onclick=async function(){var u=document.getElementById('ownerImportUrl').value.trim(),m=document.getElementById('ownerImportMsg');if(!u){m.textContent='Colle le lien de l’annonce.';m.className='err';return}m.textContent='Récupération des informations…';m.className='muted';try{var r=await fetch('/api/import-url',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:u})}),x=await r.json();if(!r.ok)throw Error(x.error||'Import impossible');m.textContent=x.duplicate?'⚠️ Cette annonce est déjà dans LOGEO.':'✅ Annonce importée dans LOGEO !';m.className='ok';document.getElementById('ownerImportUrl').value='';if(typeof loadOwner==='function')loadOwner()}catch(e){m.textContent='❌ '+e.message;m.className='err'}}})();</script>'''
+                    page=page.replace('<h3>Nouvelle annonce</h3>',block+'<h3>Nouvelle annonce</h3>',1)
+                    response.set_data(page)
+        except Exception:
+            pass
+        return response
     return app
 
 register_import_route(__import__('app').app, __import__('app').db, __import__('app').user)
