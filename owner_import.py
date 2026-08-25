@@ -15,17 +15,19 @@ class _Parser(HTMLParser):
         if tag=='meta':
             key=(a.get('property') or a.get('name') or '').lower()
             if key: self.meta[key]=a.get('content','')
-        elif tag=='script' and a.get('type','').lower()=='application/ld+json':
-            self._json=True; self._buf=[]
+        elif tag=='title': self._buf=[]
+        elif tag=='script' and a.get('type','').lower()=='application/ld+json': self._json=True; self._buf=[]
     def handle_endtag(self, tag):
-        if tag=='script' and self._json:
+        if tag=='title' and self._buf:
+            self.meta['title']=''.join(self._buf).strip(); self._buf=[]
+        elif tag=='script' and self._json:
             raw=''.join(self._buf).strip()
             if raw:
                 try:self.jsonld.append(json.loads(raw))
                 except Exception:pass
             self._json=False; self._buf=[]
     def handle_data(self, data):
-        if self._json:self._buf.append(data)
+        if self._json or 'title' not in self.meta:self._buf.append(data)
 
 def _walk(x):
     if isinstance(x,dict):
@@ -45,8 +47,11 @@ def _number(v):
 def parse_url(url):
     p=urlparse(url)
     if p.scheme not in ('http','https'):raise ValueError('URL invalide')
-    req=Request(url,headers={'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/151 Safari/537.36'})
-    with urlopen(req,timeout=20) as r: raw=r.read(4000000)
+    req=Request(url,headers={'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/151 Safari/537.36','Accept-Language':'fr-FR,fr;q=0.9,en;q=0.8'})
+    try:
+        with urlopen(req,timeout=20) as r: raw=r.read(4000000)
+    except Exception as e:
+        raise ValueError(f'Impossible d’accéder au site ({type(e).__name__}). Le site peut bloquer les robots.')
     text=raw.decode('utf-8','ignore'); q=_Parser(); q.feed(text)
     objs=[o for j in q.jsonld for o in _walk(j)]
     obj=next((o for o in objs if isinstance(o,dict) and (o.get('@type') in ('Apartment','SingleFamilyResidence','Residence','Offer') or 'price' in o or 'offers' in o)),{})
@@ -65,10 +70,10 @@ def parse_url(url):
     elif re.search(r'\bT1\b',low,re.I): typ='T1'
     elif re.search(r'\bT2\b',low,re.I) or rooms==2: typ='T2'
     elif re.search(r'\bcolocation\b',low,re.I): typ='Colocation'
-    else: typ='Studio'
+    else: typ='Appartement'
     furnished=1 if re.search(r'\bmeubl[ée]|furnished\b',low,re.I) else 0
     if not title:title=f'{typ} à louer - {city}'
-    if price is None:raise ValueError('Le site ne fournit pas automatiquement le prix')
+    if price is None:raise ValueError('Le site a été accessible, mais son prix n’est pas exposé dans les données publiques.')
     return {'title':title.strip(),'city':city.strip(),'price':price,'surface':surface or 0,'type':typ,'furnished':furnished,'description':desc.strip()[:5000],'source':p.netloc.lower().replace('www.',''),'source_url':url}
 
 @logeo.app.post('/api/import-url')
@@ -76,7 +81,7 @@ def import_url():
     u=logeo.user()
     if not u:return jsonify(error='Connexion requise'),401
     if u['role']!='owner':return jsonify(error='Import réservé aux propriétaires / agences'),403
-    url=(request.json or {}).get('url','').strip()
+    url=(request.get_json(silent=True) or {}).get('url','').strip()
     if not url:return jsonify(error='Colle le lien de l’annonce'),400
     try:data=parse_url(url)
     except Exception as e:return jsonify(error=f'Import impossible : {e}'),422
@@ -93,6 +98,6 @@ def _home_with_import():
     html=_original_home()
     block='''<div id="ownerUrlImport" class="card" style="border:2px solid #dbe4ff;background:#f8faff"><h3>🔗 Importer une annonce</h3><p class="muted">Colle le lien public d’une annonce Bien’ici, SeLoger, etc. LOGEO récupérera les informations disponibles.</p><div class="grid"><label>Lien de l’annonce<input id="ownerImportUrl" type="url" placeholder="https://www.bienici.com/annonce/..."></label><div style="display:flex;align-items:end"><button type="button" onclick="logeoImportUrl()">📥 Importer automatiquement</button></div></div><p id="ownerImportMsg"></p></div>'''
     html=html.replace('<h3>Nouvelle annonce</h3>',block+'<h3>Nouvelle annonce</h3>',1)
-    js='''<script>async function logeoImportUrl(){const i=document.getElementById("ownerImportUrl"),m=document.getElementById("ownerImportMsg"),b=i&&i.value.trim();if(!b){m.textContent="Colle d’abord le lien de l’annonce.";m.className="err";return}m.textContent="Import de l’annonce en cours…";m.className="muted";try{const r=await fetch("/api/import-url",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:b})}),x=await r.json();if(!r.ok)throw Error(x.error||"Import impossible");m.textContent=x.duplicate?"Cette annonce est déjà dans tes annonces.":"✅ Annonce importée dans Mes annonces !";m.className="ok";i.value="";if(typeof loadOwner==="function")loadOwner()}catch(e){m.textContent=e.message;m.className="err"}}</script>'''
+    js='''<script>async function logeoImportUrl(){const i=document.getElementById("ownerImportUrl"),m=document.getElementById("ownerImportMsg"),b=i&&i.value.trim();if(!b){m.textContent="Colle d’abord le lien de l’annonce.";m.className="err";return}m.textContent="Import de l’annonce en cours…";m.className="muted";try{const r=await fetch("/api/import-url",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:b})});const raw=await r.text();let x;try{x=JSON.parse(raw)}catch(_){throw Error("Réponse serveur invalide (HTTP "+r.status+"). Vérifie le déploiement LOGEO.")}if(!r.ok)throw Error(x.error||"Import impossible");m.textContent=x.duplicate?"Cette annonce est déjà dans tes annonces.":"✅ Annonce importée dans Mes annonces !";m.className="ok";i.value="";if(typeof loadOwner==="function")loadOwner()}catch(e){m.textContent="❌ "+e.message;m.className="err"}}</script>'''
     return html.replace('</body>',js+'</body>',1)
 if _original_home: logeo.app.view_functions['home']=_home_with_import
