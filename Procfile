@@ -1,1 +1,1 @@
-web: sh -c "sed -i 's/\.filters{position:sticky;top:0;z-index:2}/.filters{position:relative;z-index:1}/' static/index.html && exec waitress-serve --listen=0.0.0.0:$PORT app:app"
+web: sh -c "sed -i 's/\.filters{position:sticky;top:0;z-index:2}/.filters{position:relative;z-index:10}/; s|</style>|@media(max-width:650px){.filters{position:relative!important;top:auto!important;z-index:10!important}.mapwrap{position:relative!important;z-index:0!important}.leaflet-container{z-index:0!important}}</style>|' static/index.html && exec waitress-serve --listen=0.0.0.0:$PORT app:app"
