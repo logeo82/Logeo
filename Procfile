@@ -1,1 +1,1 @@
-web: python -c "import app, owner_import; from waitress import serve; serve(app.app, host='0.0.0.0', port=int(__import__('os').environ.get('PORT',5000)))"
+web: python boot.py
