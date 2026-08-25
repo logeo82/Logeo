@@ -78,26 +78,32 @@ def parse_url(url):
 
 @logeo.app.post('/api/import-url')
 def import_url():
-    u=logeo.user()
-    if not u:return jsonify(error='Connexion requise'),401
-    if u['role']!='owner':return jsonify(error='Import réservé aux propriétaires / agences'),403
-    url=(request.get_json(silent=True) or {}).get('url','').strip()
-    if not url:return jsonify(error='Colle le lien de l’annonce'),400
-    try:data=parse_url(url)
-    except Exception as e:return jsonify(error=f'Import impossible : {e}'),422
-    c=logeo.db()
-    existing=c.execute('SELECT * FROM listings WHERE source_url=?',(url,)).fetchone()
-    if existing:
-        c.close(); return jsonify(ok=True,duplicate=True,listing=dict(existing))
-    cur=c.execute('INSERT INTO listings(title,city,price,surface,type,distance_km,furnished,available_date,source,source_url,description,owner_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(data['title'],data['city'],data['price'],data['surface'],data['type'],0,data['furnished'],None,data['source'],url,data['description'],u['id'],datetime.utcnow().isoformat()))
-    c.commit(); row=c.execute('SELECT * FROM listings WHERE id=?',(cur.lastrowid,)).fetchone(); c.close()
-    return jsonify(ok=True,duplicate=False,listing=dict(row))
+    try:
+        u=logeo.user()
+        if not u:return jsonify(error='Connexion requise'),401
+        if u['role']!='owner':return jsonify(error='Import réservé aux propriétaires / agences'),403
+        payload=request.get_json(silent=True) or {}
+        url=str(payload.get('url') or '').strip()
+        if not url:return jsonify(error='Colle le lien de l’annonce'),400
+        data=parse_url(url)
+        c=logeo.db()
+        try:
+            existing=c.execute('SELECT * FROM listings WHERE source_url=?',(url,)).fetchone()
+            if existing:return jsonify(ok=True,duplicate=True,listing=dict(existing))
+            cur=c.execute('INSERT INTO listings(title,city,price,surface,type,distance_km,furnished,available_date,source,source_url,description,owner_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(data['title'],data['city'],data['price'],data['surface'],data['type'],0,data['furnished'],None,data['source'],url,data['description'],u['id'],datetime.utcnow().isoformat()))
+            c.commit(); row=c.execute('SELECT * FROM listings WHERE id=?',(cur.lastrowid,)).fetchone()
+            return jsonify(ok=True,duplicate=False,listing=dict(row))
+        finally:c.close()
+    except ValueError as e:
+        return jsonify(error=str(e)),422
+    except Exception as e:
+        return jsonify(error=f'Erreur LOGEO pendant l’import : {type(e).__name__}'),500
 
 _original_home=logeo.app.view_functions.get('home')
 def _home_with_import():
     html=_original_home()
     block='''<div id="ownerUrlImport" class="card" style="border:2px solid #dbe4ff;background:#f8faff"><h3>🔗 Importer une annonce</h3><p class="muted">Colle le lien public d’une annonce Bien’ici, SeLoger, etc. LOGEO récupérera les informations disponibles.</p><div class="grid"><label>Lien de l’annonce<input id="ownerImportUrl" type="url" placeholder="https://www.bienici.com/annonce/..."></label><div style="display:flex;align-items:end"><button type="button" onclick="logeoImportUrl()">📥 Importer automatiquement</button></div></div><p id="ownerImportMsg"></p></div>'''
     html=html.replace('<h3>Nouvelle annonce</h3>',block+'<h3>Nouvelle annonce</h3>',1)
-    js='''<script>async function logeoImportUrl(){const i=document.getElementById("ownerImportUrl"),m=document.getElementById("ownerImportMsg"),b=i&&i.value.trim();if(!b){m.textContent="Colle d’abord le lien de l’annonce.";m.className="err";return}m.textContent="Import de l’annonce en cours…";m.className="muted";try{const r=await fetch("/api/import-url",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:b})});const raw=await r.text();let x;try{x=JSON.parse(raw)}catch(_){throw Error("Réponse serveur invalide (HTTP "+r.status+"). Vérifie le déploiement LOGEO.")}if(!r.ok)throw Error(x.error||"Import impossible");m.textContent=x.duplicate?"Cette annonce est déjà dans tes annonces.":"✅ Annonce importée dans Mes annonces !";m.className="ok";i.value="";if(typeof loadOwner==="function")loadOwner()}catch(e){m.textContent="❌ "+e.message;m.className="err"}}</script>'''
+    js='''<script>async function logeoImportUrl(){const i=document.getElementById("ownerImportUrl"),m=document.getElementById("ownerImportMsg"),b=i&&i.value.trim();if(!b){m.textContent="Colle d’abord le lien de l’annonce.";m.className="err";return}m.textContent="Import de l’annonce en cours…";m.className="muted";try{const r=await fetch("/api/import-url",{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json"},body:JSON.stringify({url:b})});const raw=await r.text();let x;try{x=JSON.parse(raw)}catch(_){throw Error("Réponse serveur invalide (HTTP "+r.status+"). Le serveur LOGEO doit être redéployé.")}if(!r.ok)throw Error(x.error||"Import impossible");m.textContent=x.duplicate?"Cette annonce est déjà dans tes annonces.":"✅ Annonce importée dans Mes annonces !";m.className="ok";i.value="";if(typeof loadOwner==="function")loadOwner()}catch(e){m.textContent="❌ "+e.message;m.className="err"}}</script>'''
     return html.replace('</body>',js+'</body>',1)
 if _original_home: logeo.app.view_functions['home']=_home_with_import
