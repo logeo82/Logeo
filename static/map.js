@@ -1,18 +1,42 @@
-// Carte LOGEO — logements sur la carte + normalisation des tracés Valhalla.
+// Carte LOGEO — logements sur la carte
 const LOGEO_SIMULATION={
   'Studio centre-ville':{quartier:'Villebourbon',distance:'1,4 km',lat:44.0128,lon:1.3378},
   'T1 proche établissements':{quartier:'Beausoleil',distance:'2,8 km',lat:44.0248,lon:1.3725},
   'Studio rénové':{quartier:'Fonneuve',distance:'3,8 km',lat:44.0470,lon:1.3545},
   'T2 avec balcon':{quartier:'Sapiac',distance:'4,2 km',lat:43.9965,lon:1.3505}
 };
-let logeoMap,logeoMarkers=[];
-function initLogeoMap(){if(logeoMap)return logeoMap;logeoMap=L.map('map',{scrollWheelZoom:false}).setView([44.0176,1.3541],12);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors'}).addTo(logeoMap);return logeoMap}
-function escapeHtml(s){return String(s??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]))}
-function simulationFor(l,index){if(LOGEO_SIMULATION[l?.title])return LOGEO_SIMULATION[l.title];const f=[{quartier:'Villebourbon',distance:'1,4 km',lat:44.0128,lon:1.3378},{quartier:'Beausoleil',distance:'2,8 km',lat:44.0248,lon:1.3725},{quartier:'Fonneuve',distance:'3,8 km',lat:44.0470,lon:1.3545},{quartier:'Sapiac',distance:'4,2 km',lat:43.9965,lon:1.3505}];return f[index%f.length]}
-function showLogeoMap(listings){const map=initLogeoMap();logeoMarkers.forEach(m=>m.remove());logeoMarkers=[];const bounds=[];(listings||[]).forEach((l,i)=>{const s=simulationFor(l,i),marker=L.marker([s.lat,s.lon]).addTo(map);marker.bindPopup('<b>'+escapeHtml(l.title)+'</b><br>📍 Quartier : <b>'+escapeHtml(s.quartier)+'</b><br>📏 '+escapeHtml(s.distance)+' du centre de Montauban<br>💶 '+escapeHtml(l.price)+' € / mois<br>⭐ '+escapeHtml(l.score)+'% compatible');marker.on('click',()=>{if(typeof window.openListingDetail==='function')window.openListingDetail(l.id)});logeoMarkers.push(marker);bounds.push([s.lat,s.lon])});if(bounds.length)map.fitBounds(bounds,{padding:[30,30],maxZoom:14});setTimeout(()=>map.invalidateSize(),100)}
-function locateStudent(){if(!navigator.geolocation){alert('La géolocalisation n’est pas disponible sur cet appareil.');return}navigator.geolocation.getCurrentPosition(pos=>{const map=initLogeoMap(),p=[pos.coords.latitude,pos.coords.longitude];if(window.logeoStudentMarker)window.logeoStudentMarker.remove();window.logeoStudentMarker=L.circleMarker(p,{radius:9,weight:3,fillOpacity:.85}).addTo(map).bindPopup('📍 Votre position approximative').openPopup();map.setView(p,13)},()=>alert('Position non accessible. Vérifiez l’autorisation de localisation du navigateur.'))}
-function decodePolyline6(encoded){let index=0,lat=0,lon=0,coords=[];while(index<encoded.length){let result=0,shift=0,b;do{b=encoded.charCodeAt(index++)-63;result|=(b&31)<<shift;shift+=5}while(b>=32);lat+=(result&1)?~(result>>1):(result>>1);result=0;shift=0;do{b=encoded.charCodeAt(index++)-63;result|=(b&31)<<shift;shift+=5}while(b>=32);lon+=(result&1)?~(result>>1):(result>>1);coords.push([lon/1e6,lat/1e6])}return coords}
-function routeShapeToGeoJSON(shape){if(!shape)return null;if(typeof shape==='object'){if(shape.type==='Feature'||shape.type==='FeatureCollection'||shape.type==='LineString')return shape;if(Array.isArray(shape.coordinates))return {type:'Feature',properties:{},geometry:shape}}if(typeof shape==='string')return {type:'Feature',properties:{},geometry:{type:'LineString',coordinates:decodePolyline6(shape)}};return null}
-(function(){const originalFetch=window.fetch.bind(window);window.fetch=async function(input,init){const response=await originalFetch(input,init);let url='';try{url=typeof input==='string'?input:(input&&input.url)||''}catch(e){}if(!url.includes('valhalla1.openstreetmap.de/route')||!response.ok)return response;try{const data=await response.clone().json(),trip=data.trip,raw=trip&&(trip.shape||(trip.legs&&trip.legs[0]&&trip.legs[0].shape)),normalized=routeShapeToGeoJSON(raw);if(normalized)data.trip.shape=normalized;return normalized?new Response(JSON.stringify(data),{status:response.status,statusText:response.statusText,headers:{'Content-Type':'application/json'}}):response}catch(e){return response}}})();
-initMap=initLogeoMap;showMap=showLogeoMap;window.initMap=initLogeoMap;window.showMap=showLogeoMap;window.locateStudent=locateStudent;
-setTimeout(()=>{try{if(Array.isArray(allMatches)&&allMatches.length)showLogeoMap(allMatches)}catch(e){console.error('LOGEO map init',e)}},0);
+let logeoMapOverride,logeoMarkersOverride=[];
+function initLogeoMapOverride(){
+  if(logeoMapOverride)return logeoMapOverride;
+  logeoMapOverride=L.map('map',{scrollWheelZoom:false}).setView([44.0176,1.3541],12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors'}).addTo(logeoMapOverride);
+  return logeoMapOverride;
+}
+function escMap(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function simMap(l,i){return LOGEO_SIMULATION[l?.title]||[
+ {quartier:'Villebourbon',distance:'1,4 km',lat:44.0128,lon:1.3378},
+ {quartier:'Beausoleil',distance:'2,8 km',lat:44.0248,lon:1.3725},
+ {quartier:'Fonneuve',distance:'3,8 km',lat:44.0470,lon:1.3545},
+ {quartier:'Sapiac',distance:'4,2 km',lat:43.9965,lon:1.3505}
+][i%4]}
+function showMapOverride(listings){
+  const map=initLogeoMapOverride();
+  logeoMarkersOverride.forEach(m=>m.remove());logeoMarkersOverride=[];
+  const bounds=[];
+  (listings||[]).forEach((l,i)=>{
+    const s=simMap(l,i),m=L.marker([s.lat,s.lon]).addTo(map);
+    m.bindPopup('<b>'+escMap(l.title)+'</b><br>📍 '+escMap(s.quartier)+'<br>📏 '+escMap(s.distance)+'<br>💶 '+escMap(l.price)+' € / mois');
+    m.on('click',()=>{if(typeof window.openListingDetail==='function')window.openListingDetail(l.id)});
+    logeoMarkersOverride.push(m);bounds.push([s.lat,s.lon]);
+  });
+  if(bounds.length)map.fitBounds(bounds,{padding:[30,30],maxZoom:14});
+  setTimeout(()=>map.invalidateSize(),100);
+}
+function locateStudentOverride(){
+ if(!navigator.geolocation)return alert('La géolocalisation n’est pas disponible.');
+ navigator.geolocation.getCurrentPosition(p=>{const map=initLogeoMapOverride(),pos=[p.coords.latitude,p.coords.longitude];if(window.logeoStudentMarker)window.logeoStudentMarker.remove();window.logeoStudentMarker=L.circleMarker(pos,{radius:9,weight:3,fillOpacity:.85}).addTo(map).bindPopup('📍 Votre position approximative').openPopup();map.setView(pos,13)},()=>alert('Position non accessible. Vérifiez l’autorisation de localisation.'));
+}
+window.initMap=initLogeoMapOverride;
+window.showMap=showMapOverride;
+window.locateStudent=locateStudentOverride;
+setTimeout(()=>{if(window.allMatches?.length)showMapOverride(window.allMatches)},300);
