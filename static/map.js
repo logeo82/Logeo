@@ -1,4 +1,4 @@
-// Carte LOGEO — simulation des quartiers de Montauban.
+// Carte LOGEO — simulation des quartiers de Montauban + normalisation des tracés Valhalla.
 const LOGEO_SIMULATION={
   'Studio centre-ville':{quartier:'Villebourbon',distance:'1,4 km',lat:44.0128,lon:1.3378},
   'T1 proche établissements':{quartier:'Beausoleil',distance:'2,8 km',lat:44.0248,lon:1.3725},
@@ -12,7 +12,7 @@ function initLogeoMap(){
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap'}).addTo(logeoMap);
   return logeoMap;
 }
-function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function escapeHtml(s){return String(s??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]))}
 function simulationFor(l,index){
   if(LOGEO_SIMULATION[l?.title])return LOGEO_SIMULATION[l.title];
   const fallback=[
@@ -45,6 +45,51 @@ function locateStudent(){
     map.setView(p,13);
   },()=>alert('Position non accessible. Vérifiez l’autorisation de localisation du navigateur.'));
 }
+
+// Valhalla renvoie normalement la géométrie d'une étape sous forme de polyline6.
+// On la normalise ici en GeoJSON afin que Leaflet puisse toujours dessiner le tracé,
+// même lorsque l'instance publique ignore shape_format=geojson.
+function decodePolyline6(encoded){
+  let index=0,lat=0,lon=0,coords=[];
+  while(index<encoded.length){
+    let result=0,shift=0,b;
+    do{b=encoded.charCodeAt(index++)-63;result|=(b&31)<<shift;shift+=5}while(b>=32);
+    const dlat=result&1?~(result>>1):(result>>1);lat+=dlat;
+    result=0;shift=0;
+    do{b=encoded.charCodeAt(index++)-63;result|=(b&31)<<shift;shift+=5}while(b>=32);
+    const dlon=result&1?~(result>>1):(result>>1);lon+=dlon;
+    coords.push([lon/1e6,lat/1e6]);
+  }
+  return coords;
+}
+function routeShapeToGeoJSON(shape){
+  if(!shape)return null;
+  if(typeof shape==='object'){
+    if(shape.type==='Feature'||shape.type==='FeatureCollection'||shape.type==='LineString')return shape;
+    if(Array.isArray(shape.coordinates))return {type:'Feature',properties:{},geometry:shape};
+  }
+  if(typeof shape==='string')return {type:'Feature',properties:{},geometry:{type:'LineString',coordinates:decodePolyline6(shape)}};
+  return null;
+}
+(function installValhallaShapeFix(){
+  const originalFetch=window.fetch.bind(window);
+  window.fetch=async function(input,init){
+    const response=await originalFetch(input,init);
+    let url='';
+    try{url=typeof input==='string'?input:(input&&input.url)||''}catch(e){}
+    if(!url.includes('valhalla1.openstreetmap.de/route')||!response.ok)return response;
+    try{
+      const data=await response.clone().json();
+      const trip=data.trip;
+      const raw=trip&&(trip.shape||(trip.legs&&trip.legs[0]&&trip.legs[0].shape));
+      const normalized=routeShapeToGeoJSON(raw);
+      if(!normalized)return response;
+      data.trip.shape=normalized;
+      return new Response(JSON.stringify(data),{status:response.status,statusText:response.statusText,headers:{'Content-Type':'application/json'}});
+    }catch(e){return response}
+  };
+})();
+
 setTimeout(()=>{
   try{
     initMap=initLogeoMap;
