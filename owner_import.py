@@ -89,18 +89,17 @@ def _extract_from_html(url,raw):
     desc=_first(obj.get('description'),p.meta.get('description'),p.meta.get('og:description'),'')
     price=_number(_first(offers.get('price'),obj.get('price'),p.meta.get('product:price:amount'),p.meta.get('price')))
     surface=_number(_first(obj.get('surface'),obj.get('area'),p.meta.get('surface')))
-    fs=obj.get('floorSize');
+    fs=obj.get('floorSize')
     if surface is None and isinstance(fs,dict):surface=_number(fs.get('value'))
-    # Last-resort visible-text extraction. This is deliberately limited to common French labels.
-    visible=re.sub(r'<[^>]+>',' ',text);visible=re.sub(r'\\s+',' ',visible)
-    if price is None:price=_text_number(visible,[r'(?:loyer|prix|montant)[^0-9]{0,80}([0-9][0-9 .]{2,})\\s*€',r'([0-9][0-9 .]{2,})\\s*€\\s*(?:/\\s*mois|par mois)'])
-    if surface is None:surface=_text_number(visible,[r'(?:surface|superficie)[^0-9]{0,40}([0-9]+(?:[,.][0-9]+)?)\\s*m²',r'([0-9]+(?:[,.][0-9]+)?)\\s*m²'])
+    visible=re.sub(r'<[^>]+>',' ',text);visible=re.sub(r'\s+',' ',visible)
+    if price is None:price=_text_number(visible,[r'(?:loyer|prix|montant)[^0-9]{0,80}([0-9][0-9 .]{2,})\s*€',r'([0-9][0-9 .]{2,})\s*€\s*(?:/\s*mois|par mois)'])
+    if surface is None:surface=_text_number(visible,[r'(?:surface|superficie)[^0-9]{0,40}([0-9]+(?:[,.][0-9]+)?)\s*m²',r'([0-9]+(?:[,.][0-9]+)?)\s*m²'])
     city=_first((obj.get('address') or {}).get('addressLocality') if isinstance(obj.get('address'),dict) else None,p.meta.get('addresslocality'))
     if not city:
-        m=re.search(r'\\b(montauban|toulouse|albi|caussade|castelsarrasin|moissac)\\b',visible,re.I);city=m.group(1).title() if m else 'Montauban'
+        m=re.search(r'\b(montauban|toulouse|albi|caussade|castelsarrasin|moissac)\b',visible,re.I);city=m.group(1).title() if m else 'Montauban'
     low=(title or '')+' '+desc+' '+visible[:150000]
-    typ='Studio' if re.search(r'\\bstudio\\b',low,re.I) else ('T2' if re.search(r'\\bT2\\b',low,re.I) else ('T1' if re.search(r'\\bT1\\b',low,re.I) else 'Appartement'))
-    furnished=1 if re.search(r'\\bmeubl[ée]|furnished\\b',low,re.I) else 0
+    typ='Studio' if re.search(r'\bstudio\b',low,re.I) else ('T2' if re.search(r'\bT2\b',low,re.I) else ('T1' if re.search(r'\bT1\b',low,re.I) else 'Appartement'))
+    furnished=1 if re.search(r'\bmeubl[ée]|furnished\b',low,re.I) else 0
     if price is None:raise ValueError('Le prix n’est pas exposé dans les données publiques accessibles. LOGEO ne peut pas l’inventer.')
     return {'title':str(title or f'{typ} à louer à {city}').strip(),'city':str(city).strip(),'price':price,'surface':surface or 0,'type':typ,'furnished':furnished,'description':str(desc).strip()[:5000],'source':urlparse(url).netloc.lower().replace('www.',''),'source_url':_canonical_url(url),'photos':json.dumps(_photos_from_parser(p,text),ensure_ascii=False)}
 
@@ -134,3 +133,21 @@ def import_url():
         finally:c.close()
     except ValueError as e:return jsonify(error=str(e)),422
     except Exception as e:return jsonify(error=f'Erreur LOGEO pendant l’import : {type(e).__name__}'),500
+
+@logeo.app.after_request
+def ensure_owner_import_box(response):
+    """Always expose the importer in the owner page, independently of the exact HTML wording."""
+    try:
+        if response.content_type and response.content_type.startswith('text/html'):
+            page=response.get_data(as_text=True)
+            if 'id="ownerApp"' in page and 'id="ownerImportBox"' not in page:
+                block='''<div id="ownerImportBox" class="card" style="border:2px solid #111827;margin-bottom:16px"><h3>🔗 Importer une annonce</h3><p class="muted">Colle le lien public d’une annonce Bien’ici ou d’un autre portail immobilier. LOGEO va essayer de récupérer automatiquement le prix, la surface, les photos et les informations disponibles.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><input id="ownerImportUrl" type="url" placeholder="https://www.bienici.com/annonce/..." style="flex:1;min-width:220px"><button id="ownerImportBtn" type="button">📥 Importer l’annonce</button></div><p id="ownerImportMsg" style="margin-bottom:0"></p></div><script>(function(){function init(){var b=document.getElementById('ownerImportBtn');if(!b||b.dataset.ready)return;b.dataset.ready='1';b.onclick=async function(){var input=document.getElementById('ownerImportUrl'),msg=document.getElementById('ownerImportMsg'),url=input.value.trim();if(!url){msg.textContent='❌ Colle d’abord le lien de l’annonce.';msg.className='err';return}b.disabled=true;b.textContent='⏳ Import en cours…';msg.textContent='Lecture des données publiques de l’annonce…';msg.className='muted';try{var r=await fetch('/api/import-url',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({url:url})});var raw=await r.text(),x;try{x=JSON.parse(raw)}catch(e){throw Error('Le serveur LOGEO n’a pas renvoyé de JSON (HTTP '+r.status+').')};if(!r.ok)throw Error(x.error||'Import impossible');msg.textContent=x.duplicate?'⚠️ Cette annonce est déjà importée.':'✅ Annonce importée avec succès !';msg.className='ok';input.value='';if(typeof loadOwner==='function')loadOwner()}catch(e){msg.textContent='❌ '+e.message;msg.className='err'}finally{b.disabled=false;b.textContent='📥 Importer l’annonce'}}}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else setTimeout(init,0)})();</script>'''
+                marker='<section id="ownerApp"'
+                pos=page.find(marker)
+                if pos>=0:
+                    insert=page.find('>',pos)
+                    if insert>=0:page=page[:insert+1]+block+page[insert+1:]
+                response.set_data(page)
+    except Exception:
+        pass
+    return response
