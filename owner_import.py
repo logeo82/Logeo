@@ -60,29 +60,45 @@ def _fetch_json(url):
     req=Request(url,headers={'User-Agent':'Mozilla/5.0','Accept':'application/json,text/plain,*/*','Referer':'https://www.bienici.com/'})
     with urlopen(req,timeout=20) as r:return json.loads(r.read().decode('utf-8','ignore'))
 
+def _extract_photos(data):
+    """Collect public image URLs from structured portal data without inventing URLs."""
+    found=[]; seen=set()
+    keys={'photos','images','pictures','image','picture','media','photoUrls','imageUrls','picturesUrls'}
+    for o in _walk(data):
+        if not isinstance(o,dict):continue
+        for k,v in o.items():
+            if str(k).lower() not in keys:continue
+            vals=v if isinstance(v,list) else [v]
+            for item in vals:
+                if isinstance(item,dict):
+                    candidates=[item.get(x) for x in ('url','src','large','medium','original','imageUrl','photoUrl')]
+                else:candidates=[item]
+                for u in candidates:
+                    if isinstance(u,str) and u.startswith(('http://','https://')) and re.search(r'\.(?:jpe?g|png|webp)(?:[?#].*)?$',u,re.I):
+                        if u not in seen:seen.add(u);found.append(u)
+    return found[:30]
+
 def _bienici_detail(url):
     p=urlparse(url)
     if 'bienici.com' not in p.netloc.lower():return None
     slug=p.path.rstrip('/').split('/')[-1]
     if not slug:return None
-    # Bien'ici exposes individual ad data through this public detail endpoint.
     for endpoint in ('https://www.bienici.com/realEstateAd.json?id='+slug,
                      'https://www.bienici.com/realEstateAds-one.json?onlyRealEstateAd='+slug):
         try:
-            data=_fetch_json(endpoint)
-            objs=list(_walk(data))
+            data=_fetch_json(endpoint);objs=list(_walk(data))
             ad=next((o for o in objs if isinstance(o,dict) and any(k in o for k in ('price','monthlyRent','surfaceArea','adId'))),None)
             if not ad:continue
             price=_number(ad.get('price')) or _number(ad.get('monthlyRent'))
-            if price is None:
-                price=_find_key(data,('price','monthlyRent','rent','amount'))
+            if price is None:price=_find_key(data,('price','monthlyRent','rent','amount'))
             if price is None:continue
             surface=_number(ad.get('surfaceArea')) or _number(ad.get('surface')) or _find_key(ad,('surfaceArea','surface')) or 0
             city=ad.get('city') or ad.get('cityName') or ''
             title=ad.get('title') or ad.get('description') or 'Annonce Bien’ici'
             desc=ad.get('description') or ''
             typ=ad.get('propertyType') or 'Appartement'
-            return {'title':str(title).strip(),'city':str(city).strip() or 'Montauban','price':price,'surface':surface,'type':str(typ),'furnished':1 if re.search(r'(?i)meubl',str(ad)) else 0,'description':str(desc)[:5000],'source':'bienici.com','source_url':_canonical_url(url)}
+            photos=_extract_photos(data)
+            return {'title':str(title).strip(),'city':str(city).strip() or 'Montauban','price':price,'surface':surface,'type':str(typ),'furnished':1 if re.search(r'(?i)meubl',str(ad)) else 0,'description':str(desc)[:5000],'source':'bienici.com','source_url':_canonical_url(url),'photos':json.dumps(photos,ensure_ascii=False)}
         except Exception:
             continue
     return None
@@ -90,7 +106,6 @@ def _bienici_detail(url):
 def parse_url(url):
     p=urlparse(url)
     if p.scheme not in ('http','https'):raise ValueError('URL invalide')
-    # Bien'ici: use its structured detail endpoint first, not HTML metadata.
     if 'bienici.com' in p.netloc.lower():
         detail=_bienici_detail(url)
         if detail:return detail
@@ -108,9 +123,9 @@ def parse_url(url):
     fs=obj.get('floorSize');surface=_number(fs.get('value') if isinstance(fs,dict) else fs) or _number(obj.get('surface')) or _number(obj.get('area')) or 0
     address=obj.get('address');address=address if isinstance(address,dict) else {}
     city=address.get('addressLocality') or q.meta.get('addresslocality') or 'Montauban'
-    typ='Appartement'
     if price is None:raise ValueError('Le portail ne fournit pas le prix dans ses données publiques accessibles à LOGEO. Un connecteur compatible est nécessaire.')
-    return {'title':(title or f'Appartement à louer - {city}').strip(),'city':city.strip(),'price':price,'surface':surface,'type':typ,'furnished':1 if re.search(r'(?i)meubl',(title or '')+' '+desc) else 0,'description':desc.strip()[:5000],'source':p.netloc.lower().replace('www.',''),'source_url':_canonical_url(url)}
+    photos=_extract_photos(q.jsonld)
+    return {'title':(title or f'Appartement à louer - {city}').strip(),'city':city.strip(),'price':price,'surface':surface,'type':'Appartement','furnished':1 if re.search(r'(?i)meubl',(title or '')+' '+desc) else 0,'description':desc.strip()[:5000],'source':p.netloc.lower().replace('www.',''),'source_url':_canonical_url(url),'photos':json.dumps(photos,ensure_ascii=False)}
 
 @logeo.app.post('/api/import-url')
 def import_url():
@@ -122,11 +137,14 @@ def import_url():
         if not url:return jsonify(error='Colle le lien de l’annonce'),400
         data=parse_url(url);c=logeo.db()
         try:
+            # Safe migration: older databases do not have the optional photo field.
+            try:c.execute('ALTER TABLE listings ADD COLUMN photos TEXT')
+            except Exception:pass
             canonical=data['source_url'];existing=None
             for row in c.execute('SELECT * FROM listings WHERE source_url IS NOT NULL').fetchall():
                 if _canonical_url(str(row['source_url']))==canonical:existing=row;break
             if existing:return jsonify(ok=True,duplicate=True,listing=dict(existing))
-            cur=c.execute('INSERT INTO listings(title,city,price,surface,type,distance_km,furnished,available_date,source,source_url,description,owner_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(data['title'],data['city'],data['price'],data['surface'],data['type'],0,data['furnished'],None,data['source'],canonical,data['description'],u['id'],datetime.utcnow().isoformat()))
+            cur=c.execute('INSERT INTO listings(title,city,price,surface,type,distance_km,furnished,available_date,source,source_url,description,owner_id,created_at,photos) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(data['title'],data['city'],data['price'],data['surface'],data['type'],0,data['furnished'],None,data['source'],canonical,data['description'],u['id'],datetime.utcnow().isoformat(),data.get('photos','[]')))
             c.commit();row=c.execute('SELECT * FROM listings WHERE id=?',(cur.lastrowid,)).fetchone();return jsonify(ok=True,duplicate=False,listing=dict(row))
         finally:c.close()
     except ValueError as e:return jsonify(error=str(e)),422
