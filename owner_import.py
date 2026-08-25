@@ -45,7 +45,6 @@ def _number(v):
     except:return None
 
 def _find_price(text):
-    """Look for price values exposed in common portal/aggregator payloads."""
     if not text:return None
     patterns=[
         r'(?i)["\'](?:price|prix|rent|monthlyRent|monthly_rent|amount|value)["\']\s*[:=]\s*["\']?([0-9][0-9 .\u00a0]*)',
@@ -64,9 +63,48 @@ def _canonical_url(url):
     p=urlparse(url)
     return f'{p.scheme.lower()}://{p.netloc.lower()}{p.path.rstrip("/")}'
 
+def _bienici_structured(url):
+    """Use Bien'ici's own public structured listing endpoint instead of page metadata."""
+    p=urlparse(url)
+    if 'bienici.com' not in p.netloc.lower(): return None
+    parts=[x for x in p.path.split('/') if x]
+    if len(parts)<4:return None
+    ad_id=parts[-1]
+    transaction='rent' if 'location' in parts else ('buy' if 'vente' in parts else None)
+    filters={'size':24,'from':0,'page':1,'onTheMarket':[True]}
+    if transaction:filters['filterType']=transaction
+    if 'appartement' in parts:filters['propertyType']=['flat']
+    elif 'maison' in parts:filters['propertyType']=['house']
+    elif 'parking' in parts:filters['propertyType']=['parking']
+    elif 'terrain' in parts:filters['propertyType']=['land']
+    filters['queryString']=ad_id
+    headers={'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/151 Safari/537.36','Accept':'application/json,text/plain,*/*','Accept-Language':'fr-FR,fr;q=0.9','Referer':url,'X-Requested-With':'XMLHttpRequest'}
+    try:
+        api=Request('https://www.bienici.com/realEstateAds.json?filters='+__import__('urllib.parse').parse.quote(json.dumps(filters,separators=(',',':')))+'&extensionType=extendedIfNoResult&leadingCount=2',headers=headers)
+        with urlopen(api,timeout=20) as r:data=json.loads(r.read().decode('utf-8','ignore'))
+        ads=data.get('realEstateAds') or []
+        exact=next((a for a in ads if str(a.get('id',''))==ad_id),None)
+        if not exact and ads and len(ads)==1: exact=ads[0]
+        if exact and exact.get('price') is not None:
+            return exact
+    except Exception:
+        pass
+    return None
+
 def parse_url(url):
     p=urlparse(url)
     if p.scheme not in ('http','https'):raise ValueError('URL invalide')
+    structured=_bienici_structured(url)
+    if structured:
+        title=structured.get('title') or 'Annonce immobilière'
+        city=structured.get('city') or (structured.get('district') or {}).get('name') or 'Montauban'
+        desc=structured.get('description') or ''
+        price=_number(structured.get('price'))
+        surface=_number(structured.get('surfaceArea'))
+        typ='Appartement' if structured.get('propertyType')=='flat' else ('Maison' if structured.get('propertyType')=='house' else 'Appartement')
+        furnished=1 if structured.get('isFurnished') else 0
+        if price is not None:
+            return {'title':title.strip(),'city':city.strip(),'price':price,'surface':surface or 0,'type':typ,'furnished':furnished,'description':re.sub('<[^>]+>',' ',desc).strip()[:5000],'source':'bienici.com','source_url':_canonical_url(url)}
     req=Request(url,headers={'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/151 Safari/537.36','Accept-Language':'fr-FR,fr;q=0.9,en;q=0.8','Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'})
     try:
         with urlopen(req,timeout=20) as r: raw=r.read(6000000)
@@ -97,7 +135,7 @@ def parse_url(url):
     else: typ='Appartement'
     furnished=1 if re.search(r'\bmeubl[ée]|furnished\b',low,re.I) else 0
     if not title:title=f'{typ} à louer - {city}'
-    if price is None:raise ValueError('Le prix de cette annonce n’est pas directement exposé dans les métadonnées. LOGEO doit utiliser les données structurées du portail ou un connecteur compatible.')
+    if price is None:raise ValueError('Le prix de cette annonce n’est pas exposé dans les métadonnées ni dans les données structurées accessibles.')
     return {'title':title.strip(),'city':city.strip(),'price':price,'surface':surface or 0,'type':typ,'furnished':furnished,'description':desc.strip()[:5000],'source':p.netloc.lower().replace('www.',''),'source_url':_canonical_url(url)}
 
 @logeo.app.post('/api/import-url')
