@@ -3,6 +3,7 @@ from app import app
 import owner_import
 import advanced_import
 import owner_extended
+import listing_route
 import seloger_import_v2
 try:
     import market_search
