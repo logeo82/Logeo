@@ -9,6 +9,10 @@ try:
     import market_import
 except Exception as e:
     print('LOGEO market search/import disabled:', e)
+try:
+    import owner_dashboard
+except Exception as e:
+    print('LOGEO owner dashboard disabled:', e)
 from waitress import serve
 
 serve(app, host='0.0.0.0', port=int(os.environ.get('PORT','5000')))
