@@ -31,7 +31,12 @@ def _values(x,u):
  return v
 
 def _insert(x,u):
- v=_values(x,u);cols=list(v.keys());vals=[v[c] for c in cols];c=logeo.db();cur=c.execute('INSERT INTO listings('+','.join(cols)+') VALUES('+','.join('?' for _ in cols)+')',vals);c.commit();lid=cur.lastrowid;row=c.execute('SELECT * FROM listings WHERE id=?',(lid,)).fetchone();c.close();return jsonify(ok=True,id=lid,listing=dict(row))
+ v=_values(x,u);cols=list(v.keys());vals=[v[c] for c in cols];c=logeo.db();marks=','.join('%s' if logeo.USE_PG else '?' for _ in cols);sql='INSERT INTO listings('+','.join(cols)+') VALUES('+marks+')'
+ if logeo.USE_PG:
+  cur=c.execute(sql,vals);cur=c.execute("SELECT currval(pg_get_serial_sequence('listings','id')) AS id");lid=cur.fetchone()['id']
+ else:
+  cur=c.execute(sql,vals);lid=cur.lastrowid
+ c.commit();row=c.execute(logeo.ph('SELECT * FROM listings WHERE id=?'),(lid,)).fetchone();c.close();return jsonify(ok=True,id=lid,listing=dict(row))
 
 @logeo.app.post('/api/import-preview')
 def import_preview_extended():
