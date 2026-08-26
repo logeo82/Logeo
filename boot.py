@@ -15,8 +15,9 @@ except Exception as e:
     print('LOGEO owner dashboard disabled:', e)
 try:
     import student_ui
+    import student_search
 except Exception as e:
-    print('LOGEO student UI disabled:', e)
+    print('LOGEO student UI/search disabled:', e)
 from waitress import serve
 
 serve(app, host='0.0.0.0', port=int(os.environ.get('PORT','5000')))
