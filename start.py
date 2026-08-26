@@ -13,6 +13,7 @@ for _module in (
     "owner_dashboard",
     "student_ui",
     "student_search",
+    "bridge_import",
 ):
     try:
         __import__(_module)
