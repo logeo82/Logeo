@@ -11,6 +11,7 @@ for _module in (
     "seloger_import_v2",
     "market_search",
     "market_import",
+    "market_entry",
     "owner_dashboard",
     "student_ui",
     "student_search",
@@ -22,9 +23,6 @@ for _module in (
     except Exception as exc:
         print(f"LOGEO module disabled: {_module}: {exc}")
 
-# Definitive entry point for the owner market search.
-# This is deliberately injected into the real HTML response rather than relying
-# on a secondary dashboard module, so it survives changes to the owner UI.
 @app.after_request
 def definitive_market_entry(response):
     try:
@@ -33,27 +31,16 @@ def definitive_market_entry(response):
         html = response.get_data(as_text=True)
         if "id=\"marketSearchDefinitive\"" in html:
             return response
-
         block = '''
 <div id="marketSearchDefinitive" style="margin:12px 0;padding:16px;border:2px solid #111827;border-radius:14px;background:#eef2ff">
   <div style="font-size:19px;font-weight:800;margin-bottom:5px">🔎 Chercher-Trouver</div>
   <div style="color:#667085;margin-bottom:10px">Recherche automatique multi-portails et import des annonces dans LOGEO.</div>
-  <a href="/owner/market" style="display:block;text-decoration:none">
-    <button type="button" style="width:100%;padding:13px;border:0;border-radius:10px;background:#111827;color:#fff;font-weight:800;cursor:pointer">🔎 Rechercher des annonces</button>
-  </a>
+  <a href="/owner/market" style="display:block;text-decoration:none"><button type="button" style="width:100%;padding:13px;border:0;border-radius:10px;background:#111827;color:#fff;font-weight:800;cursor:pointer">🔎 Rechercher des annonces</button></a>
 </div>
 '''
-        # Put the entry immediately after the owner section starts when possible.
         marker = '<section id="ownerApp" class="hidden">'
         if marker in html:
             html = html.replace(marker, marker + block, 1)
-        else:
-            # Last-resort placement: immediately before the main application content.
-            marker2 = '<main>'
-            if marker2 in html:
-                html = html.replace(marker2, marker2 + block, 1)
-
-        # Prevent a stale browser/proxy from serving the old HTML.
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.set_data(html)
