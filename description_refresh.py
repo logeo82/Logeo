@@ -1,4 +1,4 @@
-import os,json,re,urllib.parse,urllib.request,html
+import os,json,re,urllib.parse,urllib.request,html,time
 from flask import jsonify
 import app as logeo
 import listing_enrichment as le
@@ -8,12 +8,24 @@ def _detail(source,reference):
  key=os.environ.get('CHERCHER_TROUVER_API_KEY','').strip()
  if not key:return {}
  path=f"{BASE}/annonces/{urllib.parse.quote(str(source),safe='')}/{urllib.parse.quote(str(reference),safe='')}"
- req=urllib.request.Request(path,headers={'X-Api-Key':key,'Accept':'application/json','User-Agent':'LOGEO/1.4'})
- with urllib.request.urlopen(req,timeout=25) as r:data=json.loads(r.read().decode('utf-8'))
- if not isinstance(data,dict):return {}
- for k in ('annonce','listing','item','data','result'):
-  if isinstance(data.get(k),dict):return data[k]
- return data
+ for attempt in range(3):
+  req=urllib.request.Request(path,headers={'X-Api-Key':key,'Accept':'application/json','User-Agent':'LOGEO/1.4'})
+  try:
+   with urllib.request.urlopen(req,timeout=25) as r:data=json.loads(r.read().decode('utf-8'))
+   if not isinstance(data,dict):return {}
+   for k in ('annonce','listing','item','data','result'):
+    if isinstance(data.get(k),dict):return data[k]
+   return data
+  except urllib.error.HTTPError as exc:
+   if exc.code!=429 or attempt==2: return {}
+   retry_after=exc.headers.get('Retry-After')
+   try:delay=min(max(float(retry_after),2.0),15.0)
+   except Exception:delay=3.0*(attempt+1)
+   print(f'LOGEO: ChercherTrouver rate limit (429), retry {attempt+1}/2 in {delay:.1f}s')
+   time.sleep(delay)
+  except Exception:
+   return {}
+ return {}
 
 def _deep(d,names):
  if not isinstance(d,dict):return None
@@ -101,4 +113,4 @@ def enrich_listing_full(listing_id):
  return jsonify(ok=True,enriched=True,listing=updated)
 
 logeo.app.view_functions['enrich_listing']=enrich_listing_full
-print('LOGEO: full description refresh enabled - v3 public source fallback')
+print('LOGEO: full description refresh enabled - v4 rate-limit retry')
