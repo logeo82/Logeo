@@ -3,10 +3,9 @@ from flask import Response, request, jsonify
 import app as logeo
 from app import app
 
-# Load feature modules first. The final description_refresh module MUST be loaded
-# last because it intentionally replaces the generic enrichment handler with the
-# full-detail handler and its UI. This avoids another module overwriting it.
-for _module in ("owner_import","advanced_import","owner_extended","listing_route","seloger_import_v2","market_search","market_import","enrich_endpoint_fix","listing_enrichment","listing_enrichment_fix","listing_local_parse","market_reference_ui","market_entry","owner_dashboard","student_ui","student_search","bridge_import","description_refresh"):
+# Load feature modules. The final fixes are deliberately loaded last so that
+# compatibility patches cannot be overwritten by older route registrations.
+for _module in ("owner_import","advanced_import","owner_extended","listing_route","seloger_import_v2","market_search","market_import","enrich_endpoint_fix","listing_enrichment","listing_enrichment_fix","listing_local_parse","market_reference_ui","market_entry","owner_dashboard","student_ui","student_search","bridge_import","description_refresh","market_import_pg_fix"):
     try:
         __import__(_module)
         print(f"LOGEO module loaded: {_module}")
