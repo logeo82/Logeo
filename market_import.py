@@ -57,7 +57,7 @@ def _merge_detail(item,source,reference):
    sub=detail.get(container_name)
    if isinstance(sub,dict):
     for target,names in aliases.items():
-     if merged.get(target) in (None,'',[]):
+     if merged.get(target) in (None,'','[]'):
       v=_first(sub,*names)
       if v not in (None,'',[],{}):merged[target]=v
  for k,v in _derive(merged).items():
@@ -74,6 +74,27 @@ def _update_existing(c,existing,payload):
    updates.append(f'{field}=?');values.append(value)
  if not updates:return
  values.append(existing['id']);c.execute(logeo.ph('UPDATE listings SET '+','.join(updates)+' WHERE id=?'),values);c.commit()
+def _refresh_existing_description(listing_id, source, reference, row):
+ try:
+  import description_refresh as dr
+  detail=dr._detail(source,reference)
+  if not detail:return False
+  api_desc=dr._description(detail)
+  external_desc=dr._external_description(dr._external_url(detail,row))
+  current=str(row['description'] or '') if 'description' in row.keys() else ''
+  candidates=[x for x in (api_desc,external_desc,current) if x and str(x).strip()]
+  if not candidates:return False
+  best=max(candidates,key=lambda x:len(str(x)))
+  if len(best)<=len(current):return False
+  merged=dict(row);merged['description']=best
+  for k,v in dr.le._derive(best,merged).items():
+   if merged.get(k) in (None,''):merged[k]=v
+  dr.le._update(listing_id,merged)
+  print(f'LOGEO: existing listing {listing_id} description refreshed ({len(current)} -> {len(best)} chars)')
+  return True
+ except Exception as exc:
+  print(f'LOGEO: existing listing description refresh failed: {type(exc).__name__}: {exc}')
+  return False
 @logeo.app.post('/api/market-import')
 def market_import():
  u=logeo.user()
@@ -93,7 +114,11 @@ def market_import():
   try:
    existing=c.execute(logeo.ph('SELECT * FROM listings WHERE source_url=?'),(external,)).fetchone() if external else None
    if existing:
-    payload=_payload(item,source,external);_update_existing(c,existing,payload);row=c.execute(logeo.ph('SELECT * FROM listings WHERE id=?'),(existing['id'],)).fetchone();return jsonify(ok=True,duplicate=True,enriched=True,id=existing['id'],listing=dict(row))
+    payload=_payload(item,source,external);_update_existing(c,existing,payload)
+    row=c.execute(logeo.ph('SELECT * FROM listings WHERE id=?'),(existing['id'],)).fetchone()
+    refreshed=_refresh_existing_description(existing['id'],source,reference,row)
+    row=c.execute(logeo.ph('SELECT * FROM listings WHERE id=?'),(existing['id'],)).fetchone()
+    return jsonify(ok=True,duplicate=True,enriched=refreshed,id=existing['id'],listing=dict(row))
   finally:c.close()
   import owner_extended
   return owner_extended._insert(_payload(item,source,external),u)
