@@ -45,7 +45,7 @@ def owner_dashboard_ui(response):
         if not (response.content_type or '').startswith('text/html'): return response
         page=response.get_data(as_text=True)
         if 'id="ownerApp"' not in page or 'ownerDashboardUi' in page:return response
-        script='<script id="ownerDashboardUi" src="/static/owner-dashboard.js?v=1"></script>'
+        script='<script id="ownerDashboardUi" src="/static/owner-dashboard.js?v=2"></script><script id="ownerListingDetailUi" src="/static/owner-listing-detail.js?v=1"></script>'
         response.set_data(page.replace('</body>',script+'</body>'))
         response.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0'
     except Exception: pass
