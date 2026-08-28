@@ -3,7 +3,7 @@ from flask import Response, request, jsonify
 import app as logeo
 from app import app
 
-for _module in ("owner_import","advanced_import","owner_extended","listing_route","seloger_import_v2","market_search","market_import","listing_enrichment","listing_local_parse","market_entry","owner_dashboard","student_ui","student_search","bridge_import"):
+for _module in ("owner_import","advanced_import","owner_extended","listing_route","seloger_import_v2","market_search","market_import","listing_enrichment","listing_local_parse","market_reference_ui","market_entry","owner_dashboard","student_ui","student_search","bridge_import"):
     try:
         __import__(_module)
         print(f"LOGEO module loaded: {_module}")
