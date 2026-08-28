@@ -1,0 +1,1 @@
+Correction en cours: déclenchement de l’enrichissement des annonces existantes lors de l’ouverture de la fiche. Fichier temporaire de suivi.
