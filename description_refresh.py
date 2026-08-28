@@ -1,8 +1,7 @@
-import os,json,re,urllib.parse,urllib.request
+import os,json,re,urllib.parse,urllib.request,html
 from flask import jsonify
 import app as logeo
 import listing_enrichment as le
-
 BASE='https://cherchertrouver.immo/api/v1'
 
 def _detail(source,reference):
@@ -40,7 +39,46 @@ def _description(d):
  text=re.sub(r'<br\s*/?>','\n',text,flags=re.I)
  text=re.sub(r'</p\s*>','\n\n',text,flags=re.I)
  text=re.sub(r'<[^>]+>','',text)
- return re.sub(r'\n{3,}','\n\n',text).strip()
+ return re.sub(r'\n{3,}','\n\n',html.unescape(text)).strip()
+
+def _external_url(d,row):
+ u=_deep(d,('external_url','url','source_url'))
+ if u and str(u).startswith('http'):return str(u)
+ u=row['source_url'] if 'source_url' in row.keys() else None
+ return str(u) if u and str(u).startswith('http') else ''
+
+def _external_description(url):
+ if not url:return ''
+ try:
+  req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0 (compatible; LOGEO/1.0)','Accept':'text/html,application/xhtml+xml'})
+  with urllib.request.urlopen(req,timeout=20) as r:raw=r.read(1800000).decode('utf-8','ignore')
+  candidates=[]
+  for block in re.findall(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',raw,re.I|re.S):
+   try:
+    data=json.loads(html.unescape(block));stack=data if isinstance(data,list) else [data]
+    while stack:
+     x=stack.pop()
+     if isinstance(x,dict):
+      v=x.get('description')
+      if isinstance(v,str) and len(v)>80:candidates.append(v)
+      for y in x.values():
+       if isinstance(y,(dict,list)):stack.extend(y if isinstance(y,list) else [y])
+     elif isinstance(x,list):stack.extend(x)
+   except Exception:pass
+  for pat in (r'<meta[^>]+(?:name|property)=["\']description["\'][^>]+content=["\'](.*?)["\']',r'<meta[^>]+content=["\'](.*?)["\'][^>]+(?:name|property)=["\']description["\']'):
+   for v in re.findall(pat,raw,re.I|re.S):
+    v=html.unescape(re.sub(r'<[^>]+>','',v)).strip()
+    if len(v)>80:candidates.append(v)
+  for m in re.finditer(r'(?i)["\']description["\']\s*:\s*["\']((?:\\.|[^"\']){80,})["\']',raw):
+   try:v=json.loads('"'+m.group(1)+'"')
+   except Exception:v=html.unescape(m.group(1))
+   if len(v)>80:candidates.append(v)
+  if not candidates:return ''
+  candidates=[re.sub(r'\s+',' ',x).strip() for x in candidates]
+  return max(candidates,key=len)
+ except Exception as exc:
+  print(f'LOGEO external description unavailable: {type(exc).__name__}: {exc}')
+  return ''
 
 def enrich_listing_full(listing_id):
  u=logeo.require_role('owner')
@@ -48,19 +86,19 @@ def enrich_listing_full(listing_id):
  if u is False:return jsonify(error='Compte étudiant'),403
  c=logeo.db();row=c.execute(logeo.ph('SELECT * FROM listings WHERE id=? AND owner_id=?'),(listing_id,u['id'])).fetchone();c.close()
  if not row:return jsonify(error='Annonce introuvable'),404
- source=row['source'] if 'source' in row.keys() else None
- reference=row['source_reference'] if 'source_reference' in row.keys() else None
+ source=row['source'] if 'source' in row.keys() else None;reference=row['source_reference'] if 'source_reference' in row.keys() else None
  if not source or not reference:return jsonify(ok=True,listing=dict(row),enriched=False)
  try:detail=_detail(source,reference)
  except Exception as exc:return jsonify(ok=True,listing=dict(row),enriched=False,error_detail=str(exc))
  if not detail:return jsonify(ok=True,listing=dict(row),enriched=False)
  merged=dict(row);merged.update(detail)
- merged['description']=_description(detail) or merged.get('description') or ''
+ api_desc=_description(detail);external_desc=_external_description(_external_url(detail,row))
+ descriptions=[x for x in (api_desc,external_desc,merged.get('description') or '') if x]
+ merged['description']=max(descriptions,key=len) if descriptions else ''
  for k,v in le._derive(merged['description'],merged).items():
   if merged.get(k) in (None,''):merged[k]=v
  updated=le._update(listing_id,merged)
  return jsonify(ok=True,enriched=True,listing=updated)
 
-# Replace the existing Flask view function while keeping its already-registered URL rule.
 logeo.app.view_functions['enrich_listing']=enrich_listing_full
-print('LOGEO: full description refresh enabled - v2')
+print('LOGEO: full description refresh enabled - v3 public source fallback')
