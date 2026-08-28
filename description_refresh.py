@@ -17,44 +17,55 @@ def _detail(source,reference):
     if isinstance(data.get(k),dict):return data[k]
    return data
   except urllib.error.HTTPError as exc:
-   if exc.code!=429 or attempt==2: return {}
+   if exc.code!=429 or attempt==2:return {}
    retry_after=exc.headers.get('Retry-After')
    try:delay=min(max(float(retry_after),2.0),15.0)
    except Exception:delay=3.0*(attempt+1)
    print(f'LOGEO: ChercherTrouver rate limit (429), retry {attempt+1}/2 in {delay:.1f}s')
    time.sleep(delay)
-  except Exception:
-   return {}
+  except Exception:return {}
  return {}
 
-def _deep(d,names):
- if not isinstance(d,dict):return None
- for n in names:
-  v=d.get(n)
-  if v not in (None,'',[]):return v
- for v in d.values():
-  if isinstance(v,dict):
-   x=_deep(v,names)
-   if x not in (None,'',[]):return x
- return None
-
 def _description(d):
- names=('description_full','full_description','description_long','long_description','description','descriptif','texte','ad_text','listing_description','description_text','content','body','description_html')
- v=_deep(d,names)
- if isinstance(v,dict):v=_deep(v,('text','html','content','value'))
- text='' if v is None else str(v)
- extras=[]
- for n in ('description_full','full_description','description_long','long_description'):
-  x=_deep(d,(n,))
-  if x and str(x).strip() and str(x).strip() not in text:extras.append(str(x).strip())
- if extras:text=text.rstrip()+'\n\n'+'\n\n'.join(extras)
- text=re.sub(r'<br\s*/?>','\n',text,flags=re.I)
- text=re.sub(r'</p\s*>','\n\n',text,flags=re.I)
- text=re.sub(r'<[^>]+>','',text)
- return re.sub(r'\n{3,}','\n\n',html.unescape(text)).strip()
+ names={'description','description_full','full_description','description_long','long_description','descriptif','texte','ad_text','listing_description','description_text','content','body','description_html'}
+ found=[]
+ def walk(x):
+  if isinstance(x,dict):
+   for k,v in x.items():
+    kl=str(k).lower()
+    if kl in names and isinstance(v,str) and v.strip():found.append(v)
+    elif kl in names and isinstance(v,dict):
+     for kk in ('text','html','content','value'):
+      if isinstance(v.get(kk),str) and v.get(kk).strip():found.append(v[kk])
+    if isinstance(v,(dict,list)):walk(v)
+  elif isinstance(x,list):
+   for v in x:walk(v)
+ walk(d)
+ cleaned=[]
+ for v in found:
+  v=re.sub(r'<br\s*/?>','\n',v,flags=re.I)
+  v=re.sub(r'</p\s*>','\n\n',v,flags=re.I)
+  v=re.sub(r'<[^>]+>','',v)
+  v=re.sub(r'\n{3,}','\n\n',html.unescape(v)).strip()
+  if v and v not in cleaned:cleaned.append(v)
+ result=max(cleaned,key=len) if cleaned else ''
+ print(f'LOGEO: API description candidates={len(cleaned)} max_length={len(result)}')
+ return result
 
 def _external_url(d,row):
- u=_deep(d,('external_url','url','source_url'))
+ def deep(x,names):
+  if isinstance(x,dict):
+   for n in names:
+    if x.get(n):return x[n]
+   for v in x.values():
+    z=deep(v,names)
+    if z:return z
+  elif isinstance(x,list):
+   for v in x:
+    z=deep(v,names)
+    if z:return z
+  return None
+ u=deep(d,('external_url','url','source_url'))
  if u and str(u).startswith('http'):return str(u)
  u=row['source_url'] if 'source_url' in row.keys() else None
  return str(u) if u and str(u).startswith('http') else ''
@@ -81,13 +92,8 @@ def _external_description(url):
    for v in re.findall(pat,raw,re.I|re.S):
     v=html.unescape(re.sub(r'<[^>]+>','',v)).strip()
     if len(v)>80:candidates.append(v)
-  for m in re.finditer(r'(?i)["\']description["\']\s*:\s*["\']((?:\\.|[^"\']){80,})["\']',raw):
-   try:v=json.loads('"'+m.group(1)+'"')
-   except Exception:v=html.unescape(m.group(1))
-   if len(v)>80:candidates.append(v)
   if not candidates:return ''
-  candidates=[re.sub(r'\s+',' ',x).strip() for x in candidates]
-  return max(candidates,key=len)
+  return max((re.sub(r'\s+',' ',x).strip() for x in candidates),key=len)
  except Exception as exc:
   print(f'LOGEO external description unavailable: {type(exc).__name__}: {exc}')
   return ''
@@ -100,17 +106,17 @@ def enrich_listing_full(listing_id):
  if not row:return jsonify(error='Annonce introuvable'),404
  source=row['source'] if 'source' in row.keys() else None;reference=row['source_reference'] if 'source_reference' in row.keys() else None
  if not source or not reference:return jsonify(ok=True,listing=dict(row),enriched=False)
- try:detail=_detail(source,reference)
- except Exception as exc:return jsonify(ok=True,listing=dict(row),enriched=False,error_detail=str(exc))
- if not detail:return jsonify(ok=True,listing=dict(row),enriched=False)
+ detail=_detail(source,reference)
+ if not detail:return jsonify(ok=True,listing=dict(row),enriched=False,error_detail='Détail Chercher-Trouver indisponible')
  merged=dict(row);merged.update(detail)
- api_desc=_description(detail);external_desc=_external_description(_external_url(detail,row))
+ api_desc=_description(detail)
+ external_desc=_external_description(_external_url(detail,row))
  descriptions=[x for x in (api_desc,external_desc,merged.get('description') or '') if x]
  merged['description']=max(descriptions,key=len) if descriptions else ''
  for k,v in le._derive(merged['description'],merged).items():
   if merged.get(k) in (None,''):merged[k]=v
  updated=le._update(listing_id,merged)
- return jsonify(ok=True,enriched=True,listing=updated)
+ return jsonify(ok=True,enriched=True,description_length=len(merged.get('description') or ''),listing=updated)
 
 logeo.app.view_functions['enrich_listing']=enrich_listing_full
-print('LOGEO: full description refresh enabled - v4 rate-limit retry')
+print('LOGEO: full description refresh enabled - v5 collect all API description fields')
