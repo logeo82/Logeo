@@ -9,7 +9,7 @@ def _detail(source,reference):
  if not key:return {}
  path=f"{BASE}/annonces/{urllib.parse.quote(str(source),safe='')}/{urllib.parse.quote(str(reference),safe='')}"
  for attempt in range(3):
-  req=urllib.request.Request(path,headers={'X-Api-Key':key,'Accept':'application/json','User-Agent':'LOGEO/1.4'})
+  req=urllib.request.Request(path,headers={'X-Api-Key':key,'Accept':'application/json','User-Agent':'LOGEO/1.5'})
   try:
    with urllib.request.urlopen(req,timeout=25) as r:data=json.loads(r.read().decode('utf-8'))
    if not isinstance(data,dict):return {}
@@ -49,54 +49,27 @@ def _description(d):
   v=re.sub(r'\n{3,}','\n\n',html.unescape(v)).strip()
   if v and v not in cleaned:cleaned.append(v)
  result=max(cleaned,key=len) if cleaned else ''
- print(f'LOGEO: API description candidates={len(cleaned)} max_length={len(result)}')
  return result
 
-def _external_url(d,row):
- def deep(x,names):
-  if isinstance(x,dict):
-   for n in names:
-    if x.get(n):return x[n]
-   for v in x.values():
-    z=deep(v,names)
-    if z:return z
-  elif isinstance(x,list):
-   for v in x:
-    z=deep(v,names)
-    if z:return z
-  return None
- u=deep(d,('external_url','url','source_url'))
- if u and str(u).startswith('http'):return str(u)
- u=row['source_url'] if 'source_url' in row.keys() else None
- return str(u) if u and str(u).startswith('http') else ''
-
-def _external_description(url):
- if not url:return ''
- try:
-  req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0 (compatible; LOGEO/1.0)','Accept':'text/html,application/xhtml+xml'})
-  with urllib.request.urlopen(req,timeout=20) as r:raw=r.read(1800000).decode('utf-8','ignore')
-  candidates=[]
-  for block in re.findall(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',raw,re.I|re.S):
-   try:
-    data=json.loads(html.unescape(block));stack=data if isinstance(data,list) else [data]
-    while stack:
-     x=stack.pop()
-     if isinstance(x,dict):
-      v=x.get('description')
-      if isinstance(v,str) and len(v)>80:candidates.append(v)
-      for y in x.values():
-       if isinstance(y,(dict,list)):stack.extend(y if isinstance(y,list) else [y])
-     elif isinstance(x,list):stack.extend(x)
-   except Exception:pass
-  for pat in (r'<meta[^>]+(?:name|property)=["\']description["\'][^>]+content=["\'](.*?)["\']',r'<meta[^>]+content=["\'](.*?)["\'][^>]+(?:name|property)=["\']description["\']'):
-   for v in re.findall(pat,raw,re.I|re.S):
-    v=html.unescape(re.sub(r'<[^>]+>','',v)).strip()
-    if len(v)>80:candidates.append(v)
-  if not candidates:return ''
-  return max((re.sub(r'\s+',' ',x).strip() for x in candidates),key=len)
- except Exception as exc:
-  print(f'LOGEO external description unavailable: {type(exc).__name__}: {exc}')
-  return ''
+def _duplicate_details(detail,source,reference):
+ sources=detail.get('sources') if isinstance(detail,dict) else None
+ if not isinstance(sources,list):return []
+ out=[]
+ seen={(str(source),str(reference))}
+ for s in sources:
+  if not isinstance(s,dict):continue
+  src=str(s.get('source') or '').strip();ref=str(s.get('reference') or '').strip()
+  if not src or not ref or (src,ref) in seen:continue
+  seen.add((src,ref))
+  # Free tier is limited to 1 request/sec; space duplicate detail calls.
+  time.sleep(1.1)
+  d=_detail(src,ref)
+  if d:
+   desc=_description(d)
+   if desc:
+    print(f'LOGEO: duplicate source {src}/{ref} description length={len(desc)}')
+    out.append((desc,d))
+ return out
 
 def enrich_listing_full(listing_id):
  u=logeo.require_role('owner')
@@ -109,14 +82,22 @@ def enrich_listing_full(listing_id):
  detail=_detail(source,reference)
  if not detail:return jsonify(ok=True,listing=dict(row),enriched=False,error_detail='Détail Chercher-Trouver indisponible')
  merged=dict(row);merged.update(detail)
- api_desc=_description(detail)
- external_desc=_external_description(_external_url(detail,row))
- descriptions=[x for x in (api_desc,external_desc,merged.get('description') or '') if x]
- merged['description']=max(descriptions,key=len) if descriptions else ''
+ candidates=[(_description(detail),detail)]
+ candidates.extend(_duplicate_details(detail,source,reference))
+ current=str(merged.get('description') or '').strip()
+ if current:candidates.append((current,{}))
+ candidates=[x for x in candidates if x[0]]
+ best,best_detail=max(candidates,key=lambda x:len(x[0])) if candidates else ('',{})
+ merged['description']=best
+ # Keep useful fields from the duplicate source that supplied the fuller text.
+ if best_detail:
+  for k,v in best_detail.items():
+   if merged.get(k) in (None,'',[]):merged[k]=v
  for k,v in le._derive(merged['description'],merged).items():
   if merged.get(k) in (None,''):merged[k]=v
  updated=le._update(listing_id,merged)
- return jsonify(ok=True,enriched=True,description_length=len(merged.get('description') or ''),listing=updated)
+ print(f'LOGEO: description refresh complete listing={listing_id} length={len(best)}')
+ return jsonify(ok=True,enriched=True,description_length=len(best),listing=updated)
 
 logeo.app.view_functions['enrich_listing']=enrich_listing_full
-print('LOGEO: full description refresh enabled - v5 collect all API description fields')
+print('LOGEO: full description refresh enabled - v6 duplicate-source descriptions')
