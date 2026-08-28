@@ -63,4 +63,4 @@ def enrich_listing_full(listing_id):
 
 # Replace the existing Flask view function while keeping its already-registered URL rule.
 logeo.app.view_functions['enrich_listing']=enrich_listing_full
-print('LOGEO: full description refresh enabled')
+print('LOGEO: full description refresh enabled - v2')
