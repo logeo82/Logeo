@@ -31,7 +31,7 @@ def market_import():
             if not external and item.get('sources'):external=item['sources'][0].get('url')
         c=logeo.db()
         try:
-            existing=c.execute('SELECT * FROM listings WHERE source_url=?',(external,)).fetchone() if external else None
+            existing=c.execute(logeo.ph('SELECT * FROM listings WHERE source_url=?'),(external,)).fetchone() if external else None
             if existing:return jsonify(ok=True,duplicate=True,id=existing['id'],listing=dict(existing))
         finally:c.close()
         import owner_extended
