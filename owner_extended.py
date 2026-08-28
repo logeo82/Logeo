@@ -3,7 +3,7 @@ from datetime import datetime
 from flask import request, jsonify
 import app as logeo
 
-_FIELDS={'listing_kind':"TEXT DEFAULT 'location'",'postal_code':'TEXT','address':'TEXT','neighborhood':'TEXT','rooms':'REAL','bedrooms':'REAL','bathrooms':'REAL','floor':'TEXT','total_floors':'TEXT','elevator':'INTEGER DEFAULT 0','parking':'INTEGER DEFAULT 0','garage':'INTEGER DEFAULT 0','balcony':'INTEGER DEFAULT 0','terrace':'INTEGER DEFAULT 0','garden':'INTEGER DEFAULT 0','cellar':'INTEGER DEFAULT 0','heating':'TEXT','heating_type':'TEXT','air_conditioning':'INTEGER DEFAULT 0','double_glazing':'INTEGER DEFAULT 0','internet_fiber':'INTEGER DEFAULT 0','rent_excluding_charges':'REAL','charges':'REAL','deposit':'REAL','lease_type':'TEXT','tenant_fees':'REAL','dpe_class':'TEXT','dpe_value':'REAL','ghg_class':'TEXT','ghg_value':'REAL','photos':"TEXT DEFAULT '[]'"}
+_FIELDS={'listing_kind':"TEXT DEFAULT 'location'",'postal_code':'TEXT','address':'TEXT','neighborhood':'TEXT','rooms':'REAL','bedrooms':'REAL','bathrooms':'REAL','floor':'TEXT','total_floors':'TEXT','elevator':'INTEGER DEFAULT 0','parking':'INTEGER DEFAULT 0','garage':'INTEGER DEFAULT 0','balcony':'INTEGER DEFAULT 0','terrace':'INTEGER DEFAULT 0','garden':'INTEGER DEFAULT 0','cellar':'INTEGER DEFAULT 0','heating':'TEXT','heating_type':'TEXT','air_conditioning':'INTEGER DEFAULT 0','double_glazing':'INTEGER DEFAULT 0','internet_fiber':'INTEGER DEFAULT 0','rent_excluding_charges':'REAL','charges':'REAL','deposit':'REAL','lease_type':'TEXT','tenant_fees':'REAL','dpe_class':'TEXT','dpe_value':'REAL','ghg_class':'TEXT','ghg_value':'REAL','photos':"TEXT DEFAULT '[]'",'source_reference':'TEXT','latitude':'REAL','longitude':'REAL','price_per_m2':'REAL','land_surface':'REAL','living_room_surface':'REAL','year_built':'INTEGER','shower_rooms':'REAL','toilets':'REAL','kitchen':'TEXT','pool':'INTEGER','exclusive':'INTEGER','legal_info':'TEXT','dpe_chart_url':'TEXT','ges_chart_url':'TEXT','virtual_tour_url':'TEXT','video_url':'TEXT','published_at':'TEXT','seller_type':'TEXT','seller_name':'TEXT','real_estate_network':'TEXT','region':'TEXT','department':'TEXT','listing_features':'TEXT'}
 
 def _ensure_schema():
  c=logeo.db()
@@ -33,7 +33,7 @@ def _values(x,u):
 def _insert(x,u):
  v=_values(x,u);cols=list(v.keys());vals=[v[c] for c in cols];c=logeo.db();marks=','.join('%s' if logeo.USE_PG else '?' for _ in cols);sql='INSERT INTO listings('+','.join(cols)+') VALUES('+marks+')'
  if logeo.USE_PG:
-  cur=c.execute(sql,vals);cur=c.execute("SELECT currval(pg_get_serial_sequence('listings','id')) AS id");lid=cur.fetchone()['id']
+  c.execute(sql,vals);cur=c.execute("SELECT currval(pg_get_serial_sequence('listings','id')) AS id");lid=cur.fetchone()['id']
  else:
   cur=c.execute(sql,vals);lid=cur.lastrowid
  c.commit();row=c.execute(logeo.ph('SELECT * FROM listings WHERE id=?'),(lid,)).fetchone();c.close();return jsonify(ok=True,id=lid,listing=dict(row))
@@ -80,6 +80,6 @@ def owner_extended_ui(response):
   if response.content_type and response.content_type.startswith('text/html'):
    page=response.get_data(as_text=True)
    if 'id="ownerApp"' in page and 'ownerExtendedForm' not in page:
-    response.set_data(page.replace('</body>','<script src="/static/owner-extended.js?v=2"></script></body>'))
+    response.set_data(page.replace('</body>','<script src="/static/owner-extended.js?v=3"></script></body>'))
  except Exception:pass
  return response
