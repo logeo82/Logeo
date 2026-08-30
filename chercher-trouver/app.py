@@ -45,7 +45,6 @@ def number(v):
     if v is None: return None
     if isinstance(v,(int,float)): return float(v)
     s=str(v).replace("\xa0"," ").strip()
-    # Prefer a French/European monetary number and avoid interpreting IDs as prices.
     m=re.search(r"([0-9]{2,}(?:[ .][0-9]{3})*(?:[,.][0-9]{1,2})?)", s)
     if not m: return None
     n=m.group(1).replace(" ","")
@@ -57,6 +56,55 @@ def number(v):
 
 def canonical(url):
     p=urlparse(url); return f"{p.scheme.lower()}://{p.netloc.lower()}{p.path.rstrip('/')}"
+
+def clean_description(v):
+    if v is None:return ""
+    if isinstance(v,(dict,list)):
+        if isinstance(v,dict):
+            for k in ("text","content","value","description","html"):
+                if k in v:
+                    x=clean_description(v[k])
+                    if x:return x
+        else:
+            parts=[clean_description(x) for x in v]
+            return "\n\n".join(x for x in parts if x).strip()
+        return ""
+    s=str(v)
+    s=re.sub(r"<br\s*/?>","\n",s,flags=re.I)
+    s=re.sub(r"</p\s*>","\n\n",s,flags=re.I)
+    s=re.sub(r"<[^>]+>","",s)
+    s=s.replace("\\/","/")
+    s=re.sub(r"\\n","\n",s)
+    s=re.sub(r"\n{3,}","\n\n",s)
+    return s.strip()
+
+def embedded_descriptions(text):
+    """Find description strings in page state, not only meta/JSON-LD.
+
+    Portals can expose a short ~502-character meta description while keeping
+    the full listing text inside serialized application state. We deliberately
+    collect every explicit description value and return the longest one.
+    """
+    found=[]
+    # JSON-style string values: "description":"...". Decode them with the
+    # JSON parser so escaped quotes/newlines are handled correctly.
+    pattern=re.compile(r'(["\'])(?:description|descriptionText|description_html|fullDescription|longDescription)\1\s*:\s*(["\'])',re.I)
+    for m in pattern.finditer(text):
+        q=m.group(2); start=m.end(); i=start; escaped=False
+        while i<len(text):
+            ch=text[i]
+            if escaped: escaped=False
+            elif ch=="\\": escaped=True
+            elif ch==q: break
+            i+=1
+        if i>=len(text): continue
+        raw=text[start:i]
+        try: value=json.loads('"'+raw.replace('"','\\"')+'"')
+        except Exception:
+            value=raw.replace('\\"','"').replace('\\n','\n').replace('\\/','/')
+        value=clean_description(value)
+        if value and len(value)>20: found.append(value)
+    return found
 
 def extract_photos(p,text):
     found=[]; seen=set()
@@ -78,7 +126,6 @@ def extract_photos(p,text):
                     if isinstance(item,dict):
                         for key in ("url","contentUrl","src","imageUrl","photoUrl"): add(item.get(key))
                     else: add(item)
-    # Catch image URLs embedded in page state/HTML, including escaped JSON URLs.
     for m in re.finditer(r'https?:\\?/\\?/[^\"\'<>\s]+?\\.(?:jpe?g|png|webp)(?:\\?[^\"\'<>\s]*)?',text,re.I): add(m.group(0))
     return found[:50]
 
@@ -89,20 +136,28 @@ def extract(url, raw):
     obj=next((o for o in candidates if "offers" in o or "price" in o or o.get("@type") in ("Apartment","Residence","Offer","Product","RealEstateListing")),{})
     offers=obj.get("offers") if isinstance(obj.get("offers"),dict) else {}
     title=first(obj.get("name"),p.meta.get("og:title"),p.meta.get("twitter:title"),p.meta.get("title"))
-    desc=first(obj.get("description"),p.meta.get("description"),p.meta.get("og:description"),"")
+
+    # IMPORTANT: meta description can be only ~502 chars. Collect all known
+    # sources and keep the longest explicit description available.
+    description_candidates=[]
+    for v in (obj.get("description"),p.meta.get("description"),p.meta.get("og:description")):
+        v=clean_description(v)
+        if v: description_candidates.append(v)
+    for root in p.jsonld:
+        for o in walk(root):
+            if isinstance(o,dict):
+                v=clean_description(o.get("description"))
+                if v: description_candidates.append(v)
+    description_candidates.extend(embedded_descriptions(text))
+    desc=max(description_candidates,key=len) if description_candidates else ""
+
     price=number(first(offers.get("price"),offers.get("lowPrice"),obj.get("price"),p.meta.get("product:price:amount"),p.meta.get("price"),p.meta.get("og:price:amount")))
     surface=number(first(obj.get("surface"),obj.get("area"),p.meta.get("surface"),p.meta.get("property:surface")))
     if surface is None and isinstance(obj.get("floorSize"),dict): surface=number(obj["floorSize"].get("value"))
     visible=re.sub(r"<script[^>]*>.*?</script>|<style[^>]*>.*?</style>"," ",text,flags=re.I|re.S)
     visible=re.sub(r"<[^>]+>"," ",visible); visible=re.sub(r"\s+"," ",visible)
-    # Price fallbacks cover rendered/embedded French text and common portal keys.
     if price is None:
-        patterns=[
-            r'(?:prix(?:\s+de\s+vente)?|montant|loyer|vente)[^0-9]{0,120}([0-9][0-9 .]{2,}(?:,[0-9]{1,2})?)\s*€',
-            r'([0-9][0-9 .]{2,}(?:,[0-9]{1,2})?)\s*€\s*(?:/\s*mois|par mois)',
-            r'"(?:price|salePrice|sale_price|amount|priceValue|prix|prixVente|prix_vente)"\s*[:=]\s*"?([0-9][0-9 .]*(?:[,.][0-9]+)?)',
-            r'\b(?:price|salePrice|sale_price|amount|prix|prixVente|prix_vente)\b\s*[:=]\s*([0-9][0-9 .]*(?:[,.][0-9]+)?)'
-        ]
+        patterns=[r'(?:prix(?:\s+de\s+vente)?|montant|loyer|vente)[^0-9]{0,120}([0-9][0-9 .]{2,}(?:,[0-9]{1,2})?)\s*€',r'([0-9][0-9 .]{2,}(?:,[0-9]{1,2})?)\s*€\s*(?:/\s*mois|par mois)',r'"(?:price|salePrice|sale_price|amount|priceValue|prix|prixVente|prix_vente)"\s*[:=]\s*"?([0-9][0-9 .]*(?:[,.][0-9]+)?)',r'\b(?:price|salePrice|sale_price|amount|prix|prixVente|prix_vente)\b\s*[:=]\s*([0-9][0-9 .]*(?:[,.][0-9]+)?)']
         for pat in patterns:
             m=re.search(pat,text,re.I|re.S)
             if m:
@@ -120,7 +175,8 @@ def extract(url, raw):
     furnished=1 if re.search(r"\bmeubl[ée]|furnished\b",low,re.I) else 0
     photos=extract_photos(p,text)
     if price is None: raise ValueError("Le prix n’est pas exposé dans les données publiques accessibles.")
-    return {"title":str(title or f"{typ} à louer à {city}").strip(),"city":str(city).strip(),"price":price,"surface":surface or 0,"type":typ,"furnished":furnished,"description":str(desc).strip()[:10000],"source":urlparse(url).netloc.lower().replace("www.",""),"source_url":canonical(url),"photos":photos}
+    print(f"DESCRIPTION_EXTRACTED source={urlparse(url).netloc.lower()} candidates={len(description_candidates)} length={len(desc)}")
+    return {"title":str(title or f"{typ} à louer à {city}").strip(),"city":str(city).strip(),"price":price,"surface":surface or 0,"type":typ,"furnished":furnished,"description":desc,"source":urlparse(url).netloc.lower().replace("www.",""),"source_url":canonical(url),"photos":photos}
 
 def fetch_listing(url):
     p=urlparse(url)
