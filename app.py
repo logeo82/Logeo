@@ -28,10 +28,9 @@ def user():
  if 'uid' not in session:return None
  c=db();u=c.execute(ph('SELECT * FROM users WHERE id=?'),(session['uid'],)).fetchone();c.close();return u
 def require_user():
- u=user()
- return (u,None) if u else (None,(jsonify(error='Authentification requise'),401))
+ u=user(); return (u,None) if u else (None,(jsonify(error='Authentification requise'),401))
 @app.route('/')
-def home():return send_from_directory(BASE,'static','index.html')
+def home(): return send_from_directory('static','index.html')
 @app.get('/api/health')
 def health():return jsonify(ok=True)
 @app.post('/api/register')
@@ -80,6 +79,23 @@ def matches():
   if u['min_surface'] and d.get('surface') and float(d['surface'])>=float(u['min_surface']):score+=5;reasons.append('Surface suffisante')
   d.update(score=max(0,min(100,score)),reasons=reasons,favorite=d['id'] in fav,application=d['id'] in apps);out.append(d)
  return jsonify(listings=out)
+@app.get('/api/search')
+def search():
+ u,e=require_user()
+ if e:return e
+ q=(request.args.get('q') or '').lower().strip();city=(request.args.get('city') or '').lower().strip();typ=request.args.get('type') or '';price=request.args.get('price');surface=request.args.get('surface');rooms=request.args.get('rooms')
+ c=db();rows=c.execute(ph('SELECT * FROM listings ORDER BY created_at DESC')).fetchall();c.close();out=[]
+ for r in rows:
+  d=dict(r);text=' '.join(str(d.get(k) or '') for k in ('title','city','description','type')).lower()
+  if q and q not in text:continue
+  if city and city not in str(d.get('city') or '').lower():continue
+  if typ and typ.lower() not in str(d.get('type') or '').lower():continue
+  if price and float(d.get('price') or 0)>float(price):continue
+  if surface and float(d.get('surface') or 0)<float(surface):continue
+  if rooms and str(d.get('rooms') or '')!=rooms:continue
+  d['photo']=d.get('photo')
+  out.append(d)
+ return jsonify(listings=out)
 @app.get('/api/owner/listings')
 def owner_listings():
  u,e=require_user()
@@ -107,5 +123,5 @@ def owner_delete(listing_id):
  if e:return e
  c=db();c.execute(ph('DELETE FROM listings WHERE id=? AND owner_id=?'),(listing_id,u['id']));c.commit();c.close();return jsonify(ok=True)
 @app.route('/owner/market')
-def owner_market():return send_from_directory(BASE,'static','index.html')
+def owner_market():return send_from_directory('static','index.html')
 if __name__=='__main__':serve(app,host='0.0.0.0',port=int(os.environ.get('PORT','8080')))
