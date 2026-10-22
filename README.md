@@ -1,38 +1,53 @@
-# Motion Studio (ex-Logeo)
+# Motion Studio — photo vers vidéo
 
-Prototype photo-vers-vidéo à partir de l'ancien dépôt Logeo. L'interface a été remplacée, mais le moteur de génération vidéo IA n'est **pas encore intégré**.
+Prototype photo-vers-vidéo à partir de l'ancien dépôt Logeo. L'interface est reliée à un moteur de démonstration public Hugging Face via Gradio Client.
 
-## Ce qui fonctionne
+## Fonctionnalités
+
 - Interface responsive en français.
-- Import JPG/PNG/WEBP et aperçu local dans le navigateur.
-- Description du mouvement, choix de style et de durée.
-- Vérification des droits/consentement avant de préparer une demande.
-- Aucun fichier photo n'est envoyé par cette interface de démonstration.
+- Import JPG/PNG/WEBP (12 Mo maximum).
+- Prompt de mouvement, aperçu de la photo et lecteur vidéo MP4.
+- Vérification des droits et consentement avant l'envoi.
+- Endpoint serveur `POST /api/generate-video`, limites de taille et délai entre générations.
+- Mode adulte désactivé.
 
-## Ce qui n'est pas encore implémenté
-- Génération IA réelle, file d'attente, stockage sécurisé, comptes, téléchargement MP4.
-- La prévisualisation animée est un effet CSS local, pas une vidéo générée.
-- Aucun contenu adulte n'est généré par cette version.
+## Moteur vidéo
 
-## Pourquoi le budget de 0 € change le choix technique
-Un vrai moteur image-vers-vidéo a besoin d'un GPU. Wan 2.2 est une option open source à étudier, mais ses variantes demandent une machine GPU compatible; ce n'est pas réaliste de promettre une génération illimitée et fiable sur un hébergement gratuit. Voir le dépôt officiel : https://github.com/Wan-Video/Wan2.2
+Le prototype appelle le Space public [yuknassty/wan2-2-image-to-video](https://huggingface.co/spaces/yuknassty/wan2-2-image-to-video), basé sur Wan 2.2. Ce service externe peut être occupé, changer d'API, être mis hors ligne ou imposer des limites de quota. L'intégration doit être testée après déploiement.
 
-La voie gratuite pour démarrer est de garder l'interface et de tester ensuite le modèle localement sur un ordinateur disposant d'un GPU adapté, ou d'un quota de démonstration gratuit dont les conditions autorisent expressément les usages envisagés. Les quotas gratuits ne sont pas garantis et peuvent changer.
+**Confidentialité :** lorsqu'une génération est lancée, la photo et le prompt sont transmis au Space Hugging Face public pour traitement. N'envoyez pas de photo intime, sensible ou confidentielle. Vérifier les conditions d'utilisation et la licence du modèle avant tout usage commercial. Ce prototype ne doit pas être présenté comme un service de génération garanti ou illimité.
 
-## Lancer localement
+## Configuration facultative du compte Hugging Face
+
+Le service peut être appelé sans jeton, mais l'accès anonyme peut être davantage limité. Pour associer les appels au compte du propriétaire :
+
+1. Créer un jeton Hugging Face avec les droits minimaux nécessaires.
+2. Ajouter le jeton dans les variables d'environnement de l'hébergement sous le nom `HF_TOKEN`.
+3. Ne jamais coller ce jeton dans le code, dans GitHub ou dans le navigateur.
+
+Le jeton n'est pas requis pour afficher le site. Ne jamais transmettre le jeton dans une conversation.
+
+## Démarrer localement
+
 Python 3.11+ recommandé.
 
 ```bash
 pip install -r requirements.txt
-python start.py
+python app.py
 ```
 
 Puis ouvrir http://localhost:8080.
 
-## Déploiement web gratuit (sans Railway)
-Le fichier `render.yaml` prépare un service web Render gratuit pour l'interface. Dans Render, créer un nouveau Blueprint à partir de ce dépôt et vérifier que l'offre sélectionnée est bien gratuite avant de confirmer. Les services gratuits peuvent s'endormir et leur stockage local n'est pas persistant. Vérifier les conditions du fournisseur avant d'accepter des images sensibles ou du contenu adulte.
+## Déploiement gratuit sans Railway
 
-Important : ce déploiement hébergerait seulement le prototype web; il ne fournit pas de GPU ni de génération vidéo IA. Pour un produit public traitant des images intimes, ajouter avant ouverture : règles d'usage, contrôle d'âge approprié, gestion des demandes de retrait, politique de confidentialité, sécurité du stockage, limites d'usage et mécanismes anti-abus. Interdire strictement les mineurs, les images sexuelles de personnes réelles sans consentement explicite et tout contenu illégal.
+Le fichier `render.yaml` configure un service web Render sur le plan gratuit. Dans Render, créer un Blueprint à partir de ce dépôt et vérifier que le plan sélectionné est bien gratuit avant de confirmer.
 
-## Sécurité
-Ne jamais ajouter de clés API ou de mots de passe au dépôt Git. Ne pas utiliser de photos sensibles pendant la phase prototype.
+Les services gratuits peuvent s'endormir après une période d'inactivité et leur stockage local n'est pas persistant. Le moteur vidéo reste hébergé par Hugging Face : Render ne fournit pas de GPU à ce projet.
+
+## Sécurité et limites
+
+- Utiliser uniquement des images que vous êtes autorisé à envoyer et animer.
+- Ne pas utiliser de photos de mineurs ni d'images sexuelles de personnes réelles sans consentement explicite.
+- Le mode adulte est désactivé tant qu'un moteur et ses conditions ne sont pas validés.
+- Les quotas gratuits peuvent changer et ne garantissent aucune disponibilité ni génération illimitée.
+- Avant un lancement public ou commercial, ajouter une politique de confidentialité, des conditions d'utilisation, une gestion des demandes de retrait, une protection contre les abus et une vérification juridique des licences et conditions du fournisseur.
