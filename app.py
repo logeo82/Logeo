@@ -164,7 +164,6 @@ def generate_video_api():
             upload.save(temp)
         # La photo est transmise à un Space public tiers pour effectuer le calcul.
         from gradio_client import Client, handle_file
-        client = Client('r3gm/wan2-2-fp8da-aoti-preview2', hf_token=os.environ.get('HF_TOKEN') or None)
         seconds = 5.0 if request.form.get('duration') == '5' else 3.0
         # Le modèle suit généralement mieux les consignes de mouvement en anglais.
         # Traduction automatique gratuite, avec repli sur le texte original si indisponible.
@@ -192,9 +191,7 @@ def generate_video_api():
         video_path = None
         for space_id, engine_kind in engines:
             try:
-                engine = client if engine_kind == 'primary' else Client(
-                    space_id, hf_token=os.environ.get('HF_TOKEN') or None
-                )
+                engine = Client(space_id, hf_token=os.environ.get('HF_TOKEN') or None)
                 if engine_kind == 'primary':
                     result = engine.predict(
                         handle_file(temp_path), None, motion_prompt, 4, "",
