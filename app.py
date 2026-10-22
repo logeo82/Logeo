@@ -166,8 +166,17 @@ def generate_video_api():
         from gradio_client import Client, handle_file
         client = Client('yuknassty/wan2-2-image-to-video', hf_token=os.environ.get('HF_TOKEN') or None)
         seconds = 5.0 if request.form.get('duration') == '5' else 3.0
+        # Renforce les mouvements du sujet : le modèle peut sinon privilégier un simple mouvement de caméra.
+        motion_prompt = (
+            "The main subject must perform clearly visible physical motion throughout the clip. "
+            "Animate the person's face, head, eyes, arms and body with continuous natural movement; "
+            "show the requested action clearly. Keep the camera locked and static; no camera pan, "
+            "no zoom, no dolly, no camera movement. The subject must not remain still. "
+            "Subject motion is the priority, not camera motion. "
+            "Action description: " + prompt
+        )
         result = client.predict(
-            handle_file(temp_path), prompt, seconds, 4, 42, True,
+            handle_file(temp_path), motion_prompt, seconds, 4, 42, True,
             api_name='/generate_video'
         )
         video_path = result[0] if isinstance(result, (list, tuple)) else result
