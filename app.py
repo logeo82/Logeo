@@ -178,7 +178,6 @@ def generate_video_api():
                 pass
 
 
-@app.post('/api/generate-video')
 VIDEO_LAST_REQUEST = {}
 VIDEO_RATE_LOCK = Lock()
 
