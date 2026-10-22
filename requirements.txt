@@ -1,3 +1,4 @@
 Flask>=3.0,<4
 waitress>=3.0,<4
 psycopg[binary]>=3.2,<4
+gradio_client>=1.10,<2
