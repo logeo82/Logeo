@@ -1,5 +1,6 @@
-from flask import Flask, request, jsonify, session, send_from_directory, send_file, send_file
-import os, hashlib, tempfile, tempfile, logging
+from flask import Flask, request, jsonify, session, send_from_directory, send_file
+import os, hashlib, tempfile, time
+from threading import Lock
 from datetime import datetime, timedelta
 from waitress import serve
 DATABASE_URL=os.environ.get('DATABASE_URL'); USE_PG=bool(DATABASE_URL)
@@ -154,7 +155,7 @@ def generate_video_api():
         from gradio_client import Client, handle_file
         token = os.environ.get('HF_TOKEN') or None
         client = Client('yuknassty/wan2-2-image-to-video', hf_token=token)
-        seconds = 5.0 if request.form.get('duration') == '5' else 3.0
+        seconds = 5.0 if request.form.get('duration') == '5' else 4.0
         result = client.predict(
             handle_file(temp_path), prompt, seconds, 4, 42, True,
             api_name='/generate_video'
@@ -178,7 +179,21 @@ def generate_video_api():
 
 
 @app.post('/api/generate-video')
+VIDEO_LAST_REQUEST = {}
+VIDEO_RATE_LOCK = Lock()
+
+@app.post('/api/generate-video')
 def generate_video_api():
+    client_ip = request.remote_addr or 'unknown'
+    now = time.time()
+    with VIDEO_RATE_LOCK:
+        last = VIDEO_LAST_REQUEST.get(client_ip, 0)
+        if now - last < 60:
+            return jsonify(error='Pour préserver le quota gratuit, attendez une minute entre deux générations.'), 429
+        VIDEO_LAST_REQUEST[client_ip] = now
+        if len(VIDEO_LAST_REQUEST) > 1000:
+            VIDEO_LAST_REQUEST.clear()
+            VIDEO_LAST_REQUEST[client_ip] = now
     if request.content_length and request.content_length > 13 * 1024 * 1024:
         return jsonify(error='Fichier trop volumineux (12 Mo maximum).'), 413
     upload = request.files.get('photo')
