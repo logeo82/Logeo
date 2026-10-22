@@ -164,7 +164,7 @@ def generate_video_api():
             upload.save(temp)
         # La photo est transmise à un Space public tiers pour effectuer le calcul.
         from gradio_client import Client, handle_file
-        client = Client('yuknassty/wan2-2-image-to-video', hf_token=os.environ.get('HF_TOKEN') or None)
+        client = Client('r3gm/wan2-2-fp8da-aoti-preview2', hf_token=os.environ.get('HF_TOKEN') or None)
         seconds = 5.0 if request.form.get('duration') == '5' else 3.0
         # Le modèle suit généralement mieux les consignes de mouvement en anglais.
         # Traduction automatique gratuite, avec repli sur le texte original si indisponible.
@@ -182,8 +182,12 @@ def generate_video_api():
             "Locked-off static camera, no zoom, no pan, no camera movement. "
             "Do not replace body movement with camera movement."
         )
+        # API du Space Wan 2.2 14B Fast : image, dernière image, prompt,
+        # steps, negative prompt, durée, guidances, seed, qualité et options.
         result = client.predict(
-            handle_file(temp_path), motion_prompt, seconds, 8, 42, True,
+            handle_file(temp_path), None, motion_prompt, 4, "",
+            seconds, 1, 1, 42, True, 5, "UniPCMultistep", 6.0, 16,
+            False, True,
             api_name='/generate_video'
         )
         video_path = result[0] if isinstance(result, (list, tuple)) else result
@@ -194,7 +198,7 @@ def generate_video_api():
             return jsonify(error='Le moteur n’a pas renvoyé de vidéo exploitable. Réessayez plus tard.'), 502
         return send_file(video_path, mimetype='video/mp4', as_attachment=True, download_name='motion-studio.mp4')
     except Exception as exc:
-        app.logger.warning('Échec de génération vidéo : %s', type(exc).__name__)
+        app.logger.warning('Échec de génération vidéo : %s: %s', type(exc).__name__, str(exc)[:300])
         return jsonify(error='Le moteur gratuit est occupé ou indisponible. Réessayez plus tard.'), 503
     finally:
         if temp_path:
