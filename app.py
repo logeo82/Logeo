@@ -126,58 +126,6 @@ def owner_delete(listing_id):
 @app.route('/owner/market')
 def owner_market():return send_from_directory('static','index.html')
 
-@app.post('/api/generate-video')
-def generate_video_api():
-    # Public demo proxy: strict limits help avoid accidental abuse of free GPU quota.
-    if request.content_length and request.content_length > 13 * 1024 * 1024:
-        return jsonify(error='Fichier trop volumineux (12 Mo maximum).'), 413
-    upload = request.files.get('photo')
-    prompt = (request.form.get('prompt') or '').strip()
-    mode = (request.form.get('mode') or 'natural').strip()
-    rights = request.form.get('rights') == 'yes'
-    if not upload or not upload.filename:
-        return jsonify(error='Ajoutez une photo.'), 400
-    if not rights:
-        return jsonify(error='Confirmez vos droits et le consentement nécessaire.'), 400
-    if mode == 'adult':
-        return jsonify(error='Le mode adulte reste désactivé tant qu’un moteur et ses règles ne sont pas validés.'), 400
-    if not prompt or len(prompt) > 1000:
-        return jsonify(error='Décrivez le mouvement (1 000 caractères maximum).'), 400
-    ext = os.path.splitext(upload.filename)[1].lower()
-    if ext not in ('.jpg', '.jpeg', '.png', '.webp'):
-        return jsonify(error='Format accepté : JPG, PNG ou WEBP.'), 400
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(prefix='motion-input-', suffix=ext, delete=False) as temp:
-            temp_path = temp.name
-            upload.save(temp)
-        # This sends the image to a third-party public Hugging Face Space.
-        from gradio_client import Client, handle_file
-        token = os.environ.get('HF_TOKEN') or None
-        client = Client('yuknassty/wan2-2-image-to-video', hf_token=token)
-        seconds = 5.0 if request.form.get('duration') == '5' else 4.0
-        result = client.predict(
-            handle_file(temp_path), prompt, seconds, 4, 42, True,
-            api_name='/generate_video'
-        )
-        video_path = result[0] if isinstance(result, (list, tuple)) else result
-        if isinstance(video_path, dict):
-            video_path = video_path.get('path') or video_path.get('name')
-        if not video_path or not os.path.isfile(video_path):
-            app.logger.error('Remote video API returned no local video file: %r', type(video_path).__name__)
-            return jsonify(error='Le moteur n’a pas renvoyé de vidéo exploitable. Réessayez plus tard.'), 502
-        return send_file(video_path, mimetype='video/mp4', as_attachment=True, download_name='motion-studio.mp4')
-    except Exception as exc:
-        app.logger.warning('Video generation failed: %s: %s', type(exc).__name__, exc)
-        return jsonify(error='Le moteur gratuit est occupé ou indisponible. Réessayez plus tard ; aucun paiement ne sera déclenché par Motion Studio.'), 503
-    finally:
-        if temp_path:
-            try:
-                os.remove(temp_path)
-            except OSError:
-                pass
-
-
 VIDEO_LAST_REQUEST = {}
 VIDEO_RATE_LOCK = Lock()
 
