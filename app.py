@@ -203,4 +203,68 @@ def generate_video_api():
             except OSError:
                 pass
 
+
+IMAGE_LAST_REQUEST = {}
+IMAGE_RATE_LOCK = Lock()
+
+@app.post('/api/transform-image')
+def transform_image_api():
+    client_ip = request.remote_addr or 'unknown'
+    now = time.time()
+    with IMAGE_RATE_LOCK:
+        last = IMAGE_LAST_REQUEST.get(client_ip, 0)
+        if now - last < 60:
+            return jsonify(error='Pour préserver le quota gratuit, attendez une minute entre deux transformations.'), 429
+        IMAGE_LAST_REQUEST[client_ip] = now
+    if request.content_length and request.content_length > 13 * 1024 * 1024:
+        return jsonify(error='Fichier trop volumineux (12 Mo maximum).'), 413
+    upload = request.files.get('photo')
+    prompt = (request.form.get('prompt') or '').strip()
+    if not upload or not upload.filename:
+        return jsonify(error='Ajoutez une photo.'), 400
+    if request.form.get('rights') != 'yes':
+        return jsonify(error='Confirmez vos droits et le consentement nécessaire.'), 400
+    if not prompt or len(prompt) > 1000:
+        return jsonify(error='Décrivez la transformation (1 000 caractères maximum).'), 400
+    ext = os.path.splitext(upload.filename)[1].lower()
+    if ext not in ('.jpg', '.jpeg', '.png', '.webp'):
+        return jsonify(error='Format accepté : JPG, PNG ou WEBP.'), 400
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix='motion-edit-', suffix=ext, delete=False) as temp:
+            temp_path = temp.name
+            upload.save(temp)
+        from gradio_client import Client, handle_file
+        # Moteur public de retouche d'image par instruction. Disponibilité non garantie.
+        client = Client('Mike0021/qwen-image-2.1-turbo', hf_token=os.environ.get('HF_TOKEN') or None)
+        try:
+            from deep_translator import GoogleTranslator
+            edit_prompt = GoogleTranslator(source='auto', target='en').translate(prompt) or prompt
+        except Exception:
+            edit_prompt = prompt
+        result = client.predict(
+            prompt=edit_prompt,
+            images=[handle_file(temp_path)],
+            aspect='match',
+            resolution='1K',
+            seed=-1,
+            api_name='/generate'
+        )
+        image_path = result.get('download') if isinstance(result, dict) else (result[0] if isinstance(result, (list, tuple)) else result)
+        if isinstance(image_path, dict):
+            image_path = image_path.get('path') or image_path.get('name') or image_path.get('url')
+        if not image_path or not os.path.isfile(str(image_path)):
+            app.logger.error('Le moteur de transformation n’a pas renvoyé de fichier exploitable.')
+            return jsonify(error='Le moteur n’a pas renvoyé d’image exploitable. Réessayez plus tard.'), 502
+        return send_file(image_path, mimetype='image/png', as_attachment=True, download_name='motion-studio-transformee.png')
+    except Exception as exc:
+        app.logger.warning('Échec de transformation image : %s', type(exc).__name__)
+        return jsonify(error='Le moteur de transformation est occupé ou indisponible. Réessayez plus tard.'), 503
+    finally:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
 if __name__=='__main__':serve(app,host='0.0.0.0',port=int(os.environ.get('PORT','8080')))
