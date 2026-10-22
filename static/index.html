@@ -17,13 +17,13 @@
 <div class="layout">
 <section class="panel">
 <h2>Créer une animation</h2><p class="sub">Importez une image puis décrivez le mouvement souhaité.</p>
-<div class="field"><span class="label">1. Votre image</span><label class="upload" id="dropzone" for="photo"><span class="ico">↥</span><strong>Choisir une photo</strong><small>JPG, PNG ou WEBP · aperçu local uniquement</small><input id="photo" type="file" accept="image/jpeg,image/png,image/webp"></label></div>
+<div class="field"><span class="label">1. Votre image</span><label class="upload" id="dropzone" for="photo"><span class="ico">↥</span><strong>Choisir une photo</strong><small>JPG, PNG ou WEBP · envoyée au moteur distant si vous lancez la génération</small><input id="photo" type="file" accept="image/jpeg,image/png,image/webp"></label></div>
 <div class="field"><label for="mode">2. Type d’animation</label><select class="control" id="mode"><option value="natural">Portrait naturel / mouvement doux</option><option value="cinematic">Caméra cinématique</option><option value="dance">Danse / mouvement du corps</option><option value="fantasy">Personnage fictif / fantastique</option><option value="adult">Mode adulte — personnage fictif adulte uniquement</option></select></div>
 <div class="field"><label for="prompt">3. Décrivez le mouvement</label><textarea class="control" id="prompt" placeholder="Ex. : la personne sourit doucement, tourne la tête vers la caméra, les cheveux bougent légèrement dans le vent…"></textarea></div>
-<div class="field"><label for="duration">Durée souhaitée</label><select class="control" id="duration"><option value="4">4 secondes — aperçu rapide</option><option value="5">5 secondes</option><option value="8">8 secondes</option></select></div>
-<div class="field"><label class="checks"><input type="checkbox" id="rights"><span>Je confirme avoir le droit d’utiliser cette image. Si elle représente une personne réelle, j’ai son consentement explicite pour l’animation demandée. Aucun mineur, aucune personne non consentante, ni contenu sexuel impliquant une personne réelle sans consentement.</span></label></div>
-<button class="btn" id="generate">Préparer la génération</button><p class="note">Ce prototype ne transmet ni n’enregistre votre image. La génération IA n’est pas encore connectée : le bouton vérifiera les informations et indiquera la prochaine étape, sans prétendre produire une vidéo.</p>
-<div class="status" id="status" role="status"></div>
+<div class="field"><label for="duration">Durée souhaitée</label><select class="control" id="duration"><option value="4">4 secondes — aperçu rapide</option><option value="5">5 secondes</option><option value="5">5 secondes</option></select></div>
+<div class="field"><label class="checks"><input type="checkbox" id="rights"><span>Je confirme avoir le droit d’utiliser cette image et le consentement nécessaire. Je comprends que la photo sera transmise à un service Hugging Face public pour générer la vidéo. Je n’envoie aucune photo sensible, aucun mineur ni contenu sexuel représentant une personne réelle.</span></label></div>
+<button class="btn" id="generate">Générer la vidéo IA</button><p class="note">La génération envoie votre photo à un moteur Hugging Face public. N’envoyez pas d’image sensible. Le service gratuit peut être occupé, limité ou indisponible.</p>
+<div class="status" id="status" role="status"></div><video id="generatedVideo" controls playsinline hidden style="width:100%;margin-top:16px;border-radius:14px;background:#000"></video>
 </section>
 <section class="panel">
 <div class="tag">APERÇU LOCAL</div><h2>Votre image en mouvement</h2><p class="sub">L’aperçu ci-dessous est une animation visuelle dans votre navigateur, pas une vidéo générée par IA.</p>
@@ -33,9 +33,23 @@
 </div>
 </main><footer>Motion Studio · Prototype en développement · N’envoyez pas d’images sensibles tant qu’un service de génération sécurisé n’est pas configuré.</footer>
 <script>
-const fileInput=document.getElementById('photo'), preview=document.getElementById('preview'), previewImage=document.getElementById('previewImage'), dropzone=document.getElementById('dropzone'), statusBox=document.getElementById('status');
-let objectUrl=null;
-fileInput.addEventListener('change',()=>{const file=fileInput.files&&fileInput.files[0];if(!file)return;if(!['image/jpeg','image/png','image/webp'].includes(file.type)){show('Format non pris en charge. Choisissez un fichier JPG, PNG ou WEBP.');return;}if(file.size>12*1024*1024){show('Image trop volumineuse : choisissez un fichier de 12 Mo maximum.');fileInput.value='';return;}if(objectUrl)URL.revokeObjectURL(objectUrl);objectUrl=URL.createObjectURL(file);previewImage.src=objectUrl;preview.classList.add('has-image');dropzone.querySelector('strong').textContent=file.name;dropzone.querySelector('small').textContent=(file.size/1024/1024).toFixed(1)+' Mo · cliquez pour changer de photo';});
+const fileInput=document.getElementById('photo'), preview=document.getElementById('preview'), previewImage=document.getElementById('previewImage'), dropzone=document.getElementById('dropzone'), statusBox=document.getElementById('status'), generatedVideo=document.getElementById('generatedVideo');
+let objectUrl=null, videoUrl=null;
+fileInput.addEventListener('change',()=>{const file=fileInput.files&&fileInput.files[0];if(!file)return;if(!['image/jpeg','image/png','image/webp'].includes(file.type)){show('Format non pris en charge. Choisissez un fichier JPG, PNG ou WEBP.');return;}if(file.size>12*1024*1024){show('Image trop volumineuse : choisissez un fichier de 12 Mo maximum.');fileInput.value='';return;}if(objectUrl)URL.revokeObjectURL(objectUrl);objectUrl=URL.createObjectURL(file);previewImage.src=objectUrl;preview.classList.add('has-image');dropzone.querySelector('strong').textContent=file.name;dropzone.querySelector('small').textContent=(file.size/1024/1024).toFixed(1)+' Mo · envoyée au moteur seulement si vous lancez la génération';});
 function show(message){statusBox.textContent=message;statusBox.classList.add('show');}
-document.getElementById('generate').addEventListener('click',()=>{const file=fileInput.files&&fileInput.files[0];if(!file){show('Ajoutez d’abord une image.');return;}if(!document.getElementById('rights').checked){show('Veuillez confirmer vos droits et le consentement nécessaire avant de continuer.');return;}if(!document.getElementById('prompt').value.trim()){show('Décrivez le mouvement souhaité pour préparer votre demande.');return;}if(document.getElementById('mode').value==='adult'){show('Mode adulte sélectionné. Pour le moment, aucune génération explicite n’est lancée. Le futur moteur devra être limité aux personnages fictifs clairement adultes et respecter les règles de sécurité.');return;}show('Votre demande est prête, mais le moteur vidéo IA n’est pas encore branché. Avec un budget de 0 €/mois, la prochaine étape est de tester un moteur open source sur une machine compatible ou un service gratuit dont les quotas et règles autorisent ce projet. Aucune vidéo n’a été générée.');});
+document.getElementById('generate').addEventListener('click',async()=>{
+ const file=fileInput.files&&fileInput.files[0], prompt=document.getElementById('prompt').value.trim(), mode=document.getElementById('mode').value;
+ if(!file){show('Ajoutez d’abord une image.');return;}
+ if(!document.getElementById('rights').checked){show('Veuillez confirmer vos droits, le consentement et le transfert vers le service distant.');return;}
+ if(!prompt){show('Décrivez le mouvement souhaité.');return;}
+ if(mode==='adult'){show('Le mode adulte reste désactivé tant que le moteur et ses règles ne sont pas validés.');return;}
+ const btn=document.getElementById('generate');btn.disabled=true;btn.textContent='Génération en cours…';generatedVideo.hidden=true;show('Envoi de la photo au moteur distant. La génération peut prendre plusieurs minutes et dépend du quota gratuit.');
+ const data=new FormData();data.append('photo',file);data.append('prompt',prompt);data.append('mode',mode);data.append('duration',document.getElementById('duration').value);data.append('rights',document.getElementById('rights').checked?'yes':'no');
+ try{
+  const response=await fetch('/api/generate-video',{method:'POST',body:data});
+  if(!response.ok){let message='Le moteur gratuit est momentanément indisponible.';try{const body=await response.json();if(body.error)message=body.error;}catch(e){}throw new Error(message);}
+  const blob=await response.blob();if(videoUrl)URL.revokeObjectURL(videoUrl);videoUrl=URL.createObjectURL(blob);generatedVideo.src=videoUrl;generatedVideo.hidden=false;generatedVideo.load();show('Vidéo générée. Vous pouvez la lire ci-dessous et la télécharger depuis le lecteur vidéo.');
+ }catch(error){show(error.message||'Erreur de connexion. Réessayez plus tard.');}
+ finally{btn.disabled=false;btn.textContent='Générer la vidéo IA';}
+});
 </script></body></html>
