@@ -182,20 +182,45 @@ def generate_video_api():
             "Locked-off static camera, no zoom, no pan, no camera movement. "
             "Do not replace body movement with camera movement."
         )
-        # API du Space Wan 2.2 14B Fast : image, dernière image, prompt,
-        # steps, negative prompt, durée, guidances, seed, qualité et options.
-        result = client.predict(
-            handle_file(temp_path), None, motion_prompt, 4, "",
-            seconds, 1, 1, 42, True, 5, "UniPCMultistep", 6.0, 16,
-            False, True,
-            api_name='/generate_video'
-        )
-        video_path = result[0] if isinstance(result, (list, tuple)) else result
-        if isinstance(video_path, dict):
-            video_path = video_path.get('path') or video_path.get('name')
-        if not video_path or not os.path.isfile(video_path):
-            app.logger.error('Le moteur distant n’a pas renvoyé de fichier vidéo local.')
-            return jsonify(error='Le moteur n’a pas renvoyé de vidéo exploitable. Réessayez plus tard.'), 502
+        # Moteur principal, puis moteur de secours public si le premier est saturé.
+        # Les Spaces publics restent soumis à des quotas et peuvent changer d'API.
+        engines = [
+            ('r3gm/wan2-2-fp8da-aoti-preview2', 'primary'),
+            ('preSalesAIAutomation/imagetovideo', 'fallback'),
+        ]
+        last_error = None
+        video_path = None
+        for space_id, engine_kind in engines:
+            try:
+                engine = client if engine_kind == 'primary' else Client(
+                    space_id, hf_token=os.environ.get('HF_TOKEN') or None
+                )
+                if engine_kind == 'primary':
+                    result = engine.predict(
+                        handle_file(temp_path), None, motion_prompt, 4, "",
+                        seconds, 1, 1, 42, True, 5, "UniPCMultistep", 6.0, 16,
+                        False, True, api_name='/generate_video'
+                    )
+                else:
+                    # API alternative Wan 2.2 : image, prompt, steps, negative prompt,
+                    # durée, deux guidances, seed et option seed aléatoire.
+                    result = engine.predict(
+                        handle_file(temp_path), motion_prompt, 4, "",
+                        seconds, 1, 1, 42, True, api_name='/generate_video_sync'
+                    )
+                candidate = result[0] if isinstance(result, (list, tuple)) else result
+                if isinstance(candidate, dict):
+                    candidate = candidate.get('path') or candidate.get('name') or candidate.get('video')
+                if candidate and os.path.isfile(str(candidate)):
+                    video_path = str(candidate)
+                    app.logger.info('Génération vidéo réussie via %s', space_id)
+                    break
+                last_error = RuntimeError('Le moteur n’a pas renvoyé de fichier vidéo local.')
+            except Exception as engine_exc:
+                last_error = engine_exc
+                app.logger.warning('Moteur vidéo %s indisponible : %s', space_id, str(engine_exc)[:200])
+        if not video_path:
+            raise RuntimeError('Tous les moteurs vidéo sont indisponibles') from last_error
         return send_file(video_path, mimetype='video/mp4', as_attachment=True, download_name='motion-studio.mp4')
     except Exception as exc:
         app.logger.warning('Échec de génération vidéo : %s: %s', type(exc).__name__, str(exc)[:300])
