@@ -166,13 +166,21 @@ def generate_video_api():
         from gradio_client import Client, handle_file
         client = Client('yuknassty/wan2-2-image-to-video', hf_token=os.environ.get('HF_TOKEN') or None)
         seconds = 5.0 if request.form.get('duration') == '5' else 3.0
-        # Priorise une action concrète et augmente les étapes pour améliorer l'adhérence au mouvement demandé.
+        # Le modèle suit généralement mieux les consignes de mouvement en anglais.
+        # Traduction automatique gratuite, avec repli sur le texte original si indisponible.
+        try:
+            from deep_translator import GoogleTranslator
+            action_prompt = GoogleTranslator(source='auto', target='en').translate(prompt) or prompt
+        except Exception:
+            action_prompt = prompt
         motion_prompt = (
-            "One continuous shot. The person in the image visibly performs this action: "
-            + prompt
-            + ". Clear, noticeable movement of the person's face and body throughout the clip. "
-            "The person is the only moving subject; keep the camera fixed. "
-            "Do not make a still-photo effect or only a camera zoom."
+            "IMAGE-TO-VIDEO ANIMATION. Animate the actual person, not the camera. "
+            "Required physical action: " + action_prompt + ". "
+            "The person must visibly and continuously perform this exact action with their own "
+            "arms, hands, head, face, and torso as relevant. Show clear body movement from the "
+            "first second to the last second. Preserve the person's identity and the background. "
+            "Locked-off static camera, no zoom, no pan, no camera movement. "
+            "Do not replace body movement with camera movement."
         )
         result = client.predict(
             handle_file(temp_path), motion_prompt, seconds, 8, 42, True,
