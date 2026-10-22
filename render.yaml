@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: motion-studio-prototype
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python start.py
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: LOGEO_SECRET
+        generateValue: true
