@@ -211,6 +211,100 @@ def generate_video_api():
 IMAGE_LAST_REQUEST = {}
 IMAGE_RATE_LOCK = Lock()
 
+
+@app.post('/api/video-face-swap')
+def video_face_swap_api():
+    """Face swap vidéo via MuAPI ; la clé reste côté serveur."""
+    api_key = os.environ.get('MUAPI_API_KEY')
+    if not api_key:
+        return jsonify(error="Le moteur Face Swap n'est pas configuré : ajoutez MUAPI_API_KEY dans les variables d'environnement de l'hébergement."), 503
+    if request.content_length and request.content_length > 22 * 1024 * 1024:
+        return jsonify(error="Fichiers trop volumineux. La vidéo doit faire moins de 10 Mo et la photo moins de 10 Mo."), 413
+    face = request.files.get('photo')
+    video = request.files.get('target_video')
+    if not face or not face.filename or not video or not video.filename:
+        return jsonify(error="Ajoutez une photo du visage et la vidéo à modifier."), 400
+    if request.form.get('rights') != 'yes':
+        return jsonify(error="Confirmez le consentement explicite de la personne dont le visage sera utilisé et vos droits sur la vidéo."), 400
+    face_ext = os.path.splitext(face.filename)[1].lower()
+    video_ext = os.path.splitext(video.filename)[1].lower()
+    if face_ext not in ('.jpg', '.jpeg', '.png', '.webp'):
+        return jsonify(error="La photo doit être au format JPG, PNG ou WEBP."), 400
+    if video_ext not in ('.mp4', '.mov', '.webm'):
+        return jsonify(error="La vidéo doit être au format MP4, MOV ou WEBM."), 400
+    face_path = video_path = None
+    try:
+        import requests
+        with tempfile.NamedTemporaryFile(prefix='face-source-', suffix=face_ext, delete=False) as f:
+            face_path = f.name
+            face.save(f)
+        with tempfile.NamedTemporaryFile(prefix='face-target-', suffix=video_ext, delete=False) as f:
+            video_path = f.name
+            video.save(f)
+        if os.path.getsize(face_path) > 10 * 1024 * 1024:
+            return jsonify(error="La photo doit faire 10 Mo maximum."), 413
+        if os.path.getsize(video_path) >= 10 * 1024 * 1024:
+            return jsonify(error="La vidéo doit faire moins de 10 Mo pour le moteur Face Swap."), 413
+        headers = {'x-api-key': api_key}
+        api = 'https://api.muapi.ai/api/v1'
+        # MuAPI héberge temporairement les fichiers ; leurs URLs sont utilisées uniquement pour le job.
+        with open(face_path, 'rb') as f:
+            up_face = requests.post(api + '/upload_file', headers=headers, files={'file': (os.path.basename(face_path), f)}, timeout=60)
+        with open(video_path, 'rb') as f:
+            up_video = requests.post(api + '/upload_file', headers=headers, files={'file': (os.path.basename(video_path), f)}, timeout=90)
+        if not up_face.ok or not up_video.ok:
+            app.logger.warning('MuAPI upload failed: face=%s video=%s', up_face.status_code, up_video.status_code)
+            return jsonify(error="Impossible de transmettre les fichiers au moteur. Vérifiez le solde et la clé MuAPI."), 502
+        face_url = up_face.json().get('url')
+        video_url = up_video.json().get('url')
+        if not face_url or not video_url:
+            return jsonify(error="Le service de dépôt n'a pas fourni les liens nécessaires."), 502
+        submitted = requests.post(api + '/ai-video-face-swap', headers={**headers, 'Content-Type':'application/json'},
+            json={'image_url': face_url, 'video_url': video_url, 'target_index': 0, 'target_gender': 'All'}, timeout=60)
+        if not submitted.ok:
+            app.logger.warning('MuAPI submit failed: %s %s', submitted.status_code, submitted.text[:300])
+            return jsonify(error="Le moteur a refusé la demande. Vérifiez les limites vidéo et votre solde MuAPI."), 502
+        request_id = submitted.json().get('request_id')
+        if not request_id:
+            return jsonify(error="Le moteur n'a pas renvoyé de numéro de traitement."), 502
+        # Polling borné pour ne pas monopoliser le serveur indéfiniment.
+        deadline = time.time() + 240
+        while time.time() < deadline:
+            poll = requests.get(api + '/predictions/' + str(request_id) + '/result', headers=headers, timeout=30)
+            if not poll.ok:
+                app.logger.warning('MuAPI polling failed: %s', poll.status_code)
+                return jsonify(error="Impossible de récupérer le résultat auprès du moteur."), 502
+            result = poll.json()
+            state = result.get('status')
+            if state == 'completed':
+                outputs = result.get('outputs') or result.get('output')
+                if isinstance(outputs, dict):
+                    out_url = outputs.get('video') or outputs.get('url') or outputs.get('video_url')
+                elif isinstance(outputs, list):
+                    out_url = outputs[0] if outputs else None
+                else:
+                    out_url = outputs
+                if isinstance(out_url, dict):
+                    out_url = out_url.get('url') or out_url.get('video')
+                if not isinstance(out_url, str) or not out_url.startswith('https://'):
+                    return jsonify(error="Le moteur a terminé sans fournir de lien vidéo exploitable."), 502
+                media = requests.get(out_url, timeout=120)
+                media.raise_for_status()
+                return send_file(__import__('io').BytesIO(media.content), mimetype='video/mp4', as_attachment=True, download_name='motion-studio-face-swap.mp4')
+            if state in ('failed', 'cancelled'):
+                app.logger.warning('MuAPI job failed: %s', str(result.get('error'))[:300])
+                return jsonify(error="Le moteur n'a pas pu traiter cette vidéo. Vérifiez la qualité du visage et les limites du fichier."), 502
+            time.sleep(4)
+        return jsonify(error="Le traitement prend trop de temps. Réessayez avec une vidéo plus courte."), 504
+    except Exception as exc:
+        app.logger.warning('Face swap API error: %s: %s', type(exc).__name__, str(exc)[:300])
+        return jsonify(error="Erreur lors du traitement Face Swap. Vérifiez la configuration MuAPI et réessayez."), 503
+    finally:
+        for path in (face_path, video_path):
+            if path:
+                try: os.remove(path)
+                except OSError: pass
+
 @app.post('/api/transform-image')
 def transform_image_api():
     client_ip = request.remote_addr or 'unknown'
