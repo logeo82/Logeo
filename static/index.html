@@ -22,7 +22,7 @@
 <div class="legal"><strong>Règles de l’espace 18+.</strong> Réservé aux adultes. Utilisez uniquement des images dont vous détenez les droits et pour lesquelles les personnes majeures représentées ont donné leur consentement. Aucun contenu impliquant des mineurs, aucune image intime non consentie et aucun déshabillage d’une personne réelle sans son accord explicite. Les fichiers peuvent être transmis à un moteur IA tiers pour le traitement.</div>
 <div class="layout">
 <section class="panel">
-<h2>Votre création</h2><p class="sub">Les moteurs gratuits peuvent être limités ou temporairement indisponibles.</p>
+<h2>Votre création</h2><p class="sub">Photo : FLUX.2 Klein sur un Space public partagé. Vidéo : moteur Wan sur un Space public. Files d’attente, quotas et indisponibilités possibles.</p>
 <div class="field"><label for="tool">1. Choisissez un outil</label><select class="control" id="tool"><option value="image">Transformer une photo</option><option value="video">Photo en vidéo</option><option value="faceswap">Face swap vidéo</option></select></div>
 <div class="field"><label for="photo">2. Photo source</label><label class="upload" id="dropzone" for="photo"><span style="font-size:27px">↥</span><strong>Choisir une photo</strong><small>JPG, PNG ou WEBP · 12 Mo maximum</small><input id="photo" type="file" accept="image/jpeg,image/png,image/webp"></label></div>
 <div class="field" id="videoField" hidden><label for="targetVideo">3. Vidéo cible</label><label class="upload" for="targetVideo"><span style="font-size:27px">▶</span><strong>Choisir une vidéo</strong><small>MP4, MOV ou WEBM · moins de 10 Mo</small><input id="targetVideo" type="file" accept="video/mp4,video/quicktime,video/webm"></label></div>
@@ -30,7 +30,7 @@
 <div class="field" id="durationField" hidden><label for="duration">4. Durée de la vidéo</label><select class="control" id="duration"><option value="3">3 secondes</option><option value="5">5 secondes</option></select></div>
 <div class="field"><label class="checks"><input type="checkbox" id="adult"><span>Je confirme avoir 18 ans ou plus.</span></label></div>
 <div class="field"><label class="checks"><input type="checkbox" id="rights"><span>Je confirme mon droit d’utiliser ces fichiers et le consentement explicite des personnes majeures représentées.</span></label></div>
-<button class="btn" id="generate">Transformer la photo</button><p class="note">Aucun paiement n’est demandé par cette interface. Cela ne garantit pas que le moteur distant soit gratuit ni disponible.</p><div class="status" id="status" role="status"></div>
+<button class="btn" id="generate">Transformer la photo</button><p class="note">Cette interface ne déclenche aucun paiement. Les moteurs publics peuvent appliquer leurs propres quotas et règles de contenu. Évitez les images sensibles : les fichiers sont transmis au fournisseur du moteur pour le traitement.</p><div class="status" id="status" role="status"></div>
 <img id="outputImage" alt="Résultat de la transformation" hidden style="width:100%;margin-top:14px;border-radius:12px"><video id="outputVideo" controls playsinline hidden></video>
 </section>
 <section class="panel"><h2>Aperçu</h2><p class="sub">L’aperçu local montre la photo choisie. Il ne s’agit pas encore du résultat IA.</p><div class="preview" id="preview"><div class="placeholder" id="placeholder"><div style="font-size:42px">✧</div><b>Votre photo apparaîtra ici</b><span style="font-size:12px">Choisissez une image pour commencer</span></div><img id="previewImage" alt="Aperçu de la photo importée"></div></section>
