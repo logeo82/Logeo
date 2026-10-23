@@ -329,18 +329,14 @@ def video_face_swap_api():
 
 @app.post('/api/transform-image')
 def transform_image_api():
-    """Retouche d'image via OpenAI Images API. La clé reste côté serveur."""
+    """Édition d'image via le Space public FLUX.2 Klein 4B sur Hugging Face."""
     client_ip = request.remote_addr or 'unknown'
     now = time.time()
     with IMAGE_RATE_LOCK:
         last = IMAGE_LAST_REQUEST.get(client_ip, 0)
         if now - last < 60:
-            return jsonify(error='Pour préserver le quota, attendez une minute entre deux transformations.'), 429
+            return jsonify(error='Pour préserver le quota partagé, attendez une minute entre deux transformations.'), 429
         IMAGE_LAST_REQUEST[client_ip] = now
-
-    api_key = os.environ.get('OPENAI_API_KEY')
-    if not api_key:
-        return jsonify(error="Le moteur OpenAI n'est pas encore configuré. Ajoutez OPENAI_API_KEY dans les variables d'environnement Render, puis vérifiez que la facturation API OpenAI est activée."), 503
 
     if request.content_length and request.content_length > 13 * 1024 * 1024:
         return jsonify(error='Fichier trop volumineux (12 Mo maximum).'), 413
@@ -353,65 +349,55 @@ def transform_image_api():
     if not prompt or len(prompt) > 1000:
         return jsonify(error='Décrivez la transformation (1 000 caractères maximum).'), 400
     ext = os.path.splitext(upload.filename)[1].lower()
-    mime_types = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp'}
-    if ext not in mime_types:
+    if ext not in ('.jpg', '.jpeg', '.png', '.webp'):
         return jsonify(error='Format accepté : JPG, PNG ou WEBP.'), 400
 
+    temp_path = output_path = None
     try:
-        import requests
-        # Qualité low par défaut pour limiter les coûts. Aucun appel sans clé configurée.
-        files = {'image': (os.path.basename(upload.filename), upload.stream, mime_types[ext])}
-        data = {
-            'model': os.environ.get('OPENAI_IMAGE_MODEL', 'gpt-image-2.5-flare'),
-            'prompt': (
-                'Edit the provided image according to this instruction. Preserve the identity '
-                'and recognizable facial features of consenting adults, unless the user asks '
-                'for a non-identifying artistic transformation. Do not sexualize minors or '
-                'create non-consensual intimate imagery. User instruction: ' + prompt
-            ),
-            'quality': os.environ.get('OPENAI_IMAGE_QUALITY', 'low'),
-            'size': '1024x1024',
-            'output_format': 'png',
-            'n': 1
-        }
-        response = requests.post(
-            'https://api.openai.com/v1/images/edits',
-            headers={'Authorization': 'Bearer ' + api_key},
-            files=files,
-            data=data,
-            timeout=180
-        )
-        if not response.ok:
-            detail = ''
-            try:
-                payload = response.json()
-                detail = (payload.get('error') or {}).get('message', '')
-                code = (payload.get('error') or {}).get('code', '')
-            except Exception:
-                code = ''
-            app.logger.warning('OpenAI image edit failed: HTTP %s code=%s detail=%s',
-                               response.status_code, str(code)[:80], str(detail)[:250])
-            if response.status_code in (401, 403):
-                return jsonify(error="La clé OpenAI est refusée ou l'organisation n'est pas autorisée à utiliser ce modèle. Vérifiez la clé et l'accès API."), 502
-            if response.status_code == 429:
-                return jsonify(error="Quota OpenAI épuisé ou limite de débit atteinte. Vérifiez la facturation et les limites API."), 429
-            return jsonify(error="OpenAI n'a pas pu transformer cette image. Vérifiez le prompt, l'accès au modèle et la facturation API, puis réessayez."), 502
+        from gradio_client import Client, handle_file
+        with tempfile.NamedTemporaryFile(prefix='motion-input-', suffix=ext, delete=False) as temp:
+            temp_path = temp.name
+            upload.save(temp)
 
-        payload = response.json()
-        images = payload.get('data') or []
-        encoded = images[0].get('b64_json') if images else None
-        if not encoded:
-            return jsonify(error="OpenAI n'a pas renvoyé d'image exploitable."), 502
-        import base64
-        image_bytes = base64.b64decode(encoded)
-        return send_file(__import__('io').BytesIO(image_bytes), mimetype='image/png',
-                         as_attachment=True, download_name='motion-studio-transformee.png')
-    except requests.Timeout:
-        app.logger.warning('OpenAI image edit timed out')
-        return jsonify(error="La retouche prend trop de temps. Réessayez avec une photo plus légère."), 504
+        # Espace public partagé : aucun jeton payant requis, mais file d'attente et quotas possibles.
+        client = Client('black-forest-labs/FLUX.2-klein-4B', hf_token=os.environ.get('HF_TOKEN') or None)
+        result = client.predict(
+            prompt,
+            [(handle_file(temp_path), None)],
+            'Distilled (4 steps)',
+            42,
+            True,
+            1024,
+            1024,
+            4,
+            1.0,
+            False,
+            api_name='/infer'
+        )
+        candidate = result[0] if isinstance(result, (list, tuple)) else result
+        if isinstance(candidate, dict):
+            candidate = candidate.get('path') or candidate.get('name') or candidate.get('url')
+        if not candidate:
+            return jsonify(error='Le moteur photo n’a pas renvoyé d’image exploitable.'), 502
+        candidate = str(candidate)
+        if os.path.isfile(candidate):
+            output_path = candidate
+            return send_file(output_path, mimetype='image/png', as_attachment=True,
+                             download_name='motion-studio-transformee.png')
+        if candidate.startswith('https://'):
+            import requests
+            response = requests.get(candidate, timeout=90)
+            response.raise_for_status()
+            return send_file(__import__('io').BytesIO(response.content), mimetype='image/png',
+                             as_attachment=True, download_name='motion-studio-transformee.png')
+        return jsonify(error='Le moteur photo a renvoyé un format de résultat inattendu.'), 502
     except Exception as exc:
-        app.logger.warning('OpenAI image edit error: %s: %s', type(exc).__name__, str(exc)[:250])
-        return jsonify(error="Erreur de connexion au moteur OpenAI. Réessayez plus tard."), 503
+        app.logger.warning('FLUX.2 Klein image edit failed: %s: %s', type(exc).__name__, str(exc)[:250])
+        return jsonify(error='Le moteur photo gratuit est occupé, a atteint son quota ou a refusé cette consigne. Réessayez plus tard avec une transformation autorisée.'), 503
+    finally:
+        if temp_path:
+            try: os.remove(temp_path)
+            except OSError: pass
 
 
 if __name__=='__main__':serve(app,host='0.0.0.0',port=int(os.environ.get('PORT','8080')))
