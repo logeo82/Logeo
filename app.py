@@ -183,63 +183,48 @@ def generate_video_api():
         )
         # Moteur principal, puis moteur de secours public si le premier est saturé.
         # Les Spaces publics restent soumis à des quotas et peuvent changer d'API.
-        engines = [
-            ('r3gm/wan2-2-fp8da-aoti-preview2', 'primary'),
-            ('preSalesAIAutomation/imagetovideo', 'fallback'),
-        ]
-        last_error = None
-        video_path = None
-        for space_id, engine_kind in engines:
-            try:
-                engine = Client(space_id, hf_token=os.environ.get('HF_TOKEN') or None)
-                if engine_kind == 'primary':
-                    # Signature vérifiée dans le Space Wan 2.2 : les 19 entrées
-                    # doivent être fournies dans l'ordre. Les anciens arguments
-                    # omettaient plusieurs paramètres et plaçaient des booléens
-                    # dans les champs de modèle d'upscaling, ce qui faisait échouer
-                    # la génération avant l'inférence.
-                    result = engine.predict(
-                        handle_file(temp_path),  # input_image
-                        None,                     # last_image
-                        motion_prompt,            # prompt
-                        4,                        # steps
-                        "",                       # negative_prompt
-                        seconds,                  # duration_seconds
-                        1.0,                      # guidance_scale
-                        1.0,                      # guidance_scale_2
-                        42,                       # seed
-                        True,                     # randomize_seed
-                        5,                        # quality
-                        "UniPCMultistep",         # scheduler
-                        6.0,                      # flow_shift
-                        16,                       # frame_multiplier
-                        "4x-UltraSharp",          # upscale_model
-                        1.0,                      # upscale_factor
-                        True,                     # video_component
-                        False,                    # safe_mode
-                        True,                     # enable_safety_checker
-                        api_name='/generate_video'
-                    )
-                else:
-                    # API alternative Wan 2.2 : image, prompt, steps, negative prompt,
-                    # durée, deux guidances, seed et option seed aléatoire.
-                    result = engine.predict(
-                        handle_file(temp_path), motion_prompt, 4, "",
-                        seconds, 1, 1, 42, True, api_name='/generate_video_sync'
-                    )
-                candidate = result[0] if isinstance(result, (list, tuple)) else result
-                if isinstance(candidate, dict):
-                    candidate = candidate.get('path') or candidate.get('name') or candidate.get('video')
-                if candidate and os.path.isfile(str(candidate)):
-                    video_path = str(candidate)
-                    app.logger.info('Génération vidéo réussie via %s', space_id)
-                    break
-                last_error = RuntimeError('Le moteur n’a pas renvoyé de fichier vidéo local.')
-            except Exception as engine_exc:
-                last_error = engine_exc
-                app.logger.warning('Moteur vidéo %s indisponible : %s', space_id, str(engine_exc)[:200])
+        # Moteur Wan 2.2 utilisé par le projet open source NiftyVid.
+        # Sa signature a été vérifiée dans son proxy public : 16 paramètres
+        # dans l'ordre exact du Space cbensimon/wan2-2-fp8da-aoti-preview2.
+        space_id = 'cbensimon/wan2-2-fp8da-aoti-preview2'
+        try:
+            engine = Client(space_id, hf_token=os.environ.get('HF_TOKEN') or None)
+            result = engine.predict(
+                handle_file(temp_path),  # input_image
+                None,                    # last_image
+                motion_prompt,           # prompt
+                6,                       # steps
+                "",                      # negative_prompt
+                min(seconds, 4.5),       # duration_seconds (free Space times out near 5s)
+                1,                       # guidance_scale
+                1,                       # guidance_scale_2
+                42,                      # seed
+                True,                    # randomize_seed
+                6,                       # quality
+                "UniPCMultistep",        # scheduler
+                3.0,                     # flow_shift
+                16,                      # frame_multiplier
+                False,                   # safe_mode
+                True,                    # play_result_video
+                api_name='/generate_video'
+            )
+            candidate = result[0] if isinstance(result, (list, tuple)) else result
+            if isinstance(candidate, dict):
+                candidate = candidate.get('path') or candidate.get('name') or candidate.get('video') or candidate.get('url')
+            if candidate and os.path.isfile(str(candidate)):
+                video_path = str(candidate)
+            elif isinstance(candidate, str) and candidate.startswith('https://'):
+                import requests
+                media = requests.get(candidate, timeout=120)
+                media.raise_for_status()
+                return send_file(__import__('io').BytesIO(media.content), mimetype='video/mp4', as_attachment=True, download_name='motion-studio.mp4')
+            else:
+                raise RuntimeError('Le Space Wan 2.2 n’a pas renvoyé de fichier vidéo exploitable.')
+        except Exception as engine_exc:
+            app.logger.warning('Space Wan 2.2 %s indisponible : %s', space_id, str(engine_exc)[:300])
+            raise RuntimeError('Le moteur Wan 2.2 est indisponible ou son API a changé.') from engine_exc
         if not video_path:
-            raise RuntimeError('Tous les moteurs vidéo sont indisponibles') from last_error
+            raise RuntimeError('Le moteur vidéo n’a pas renvoyé de fichier exploitable.')
         return send_file(video_path, mimetype='video/mp4', as_attachment=True, download_name='motion-studio.mp4')
     except Exception as exc:
         app.logger.warning('Échec de génération vidéo : %s: %s', type(exc).__name__, str(exc)[:300])
