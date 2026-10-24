@@ -336,7 +336,7 @@ def video_face_swap_api():
 
 @app.post('/api/transform-image')
 def transform_image_api():
-    """Édition d'image via le Space public FLUX.2 Klein 4B sur Hugging Face."""
+    """Édition d'image via un vrai Space Gradio public hébergeant FLUX.2 Klein 4B."""
     client_ip = request.remote_addr or 'unknown'
     now = time.time()
     with IMAGE_RATE_LOCK:
@@ -359,48 +359,90 @@ def transform_image_api():
     if ext not in ('.jpg', '.jpeg', '.png', '.webp'):
         return jsonify(error='Format accepté : JPG, PNG ou WEBP.'), 400
 
-    temp_path = output_path = None
+    temp_path = None
     try:
         from gradio_client import Client, handle_file
         with tempfile.NamedTemporaryFile(prefix='motion-input-', suffix=ext, delete=False) as temp:
             temp_path = temp.name
             upload.save(temp)
 
-        # Espace public partagé : aucun jeton payant requis, mais file d'attente et quotas possibles.
-        client = Client('black-forest-labs/FLUX.2-klein-4B', hf_token=os.environ.get('HF_TOKEN') or None)
-        result = client.predict(
-            prompt,
-            [(handle_file(temp_path), None)],
-            'Distilled (4 steps)',
-            42,
-            True,
-            1024,
-            1024,
-            4,
-            1.0,
-            False,
-            api_name='/infer'
-        )
-        candidate = result[0] if isinstance(result, (list, tuple)) else result
+        # Important : FLUX.2-klein-4B est un dépôt de modèle, pas un Space.
+        # Ce Space public expose une véritable interface Gradio avec une API.
+        space_id = 'Xurxowsky/flux2-klein-4b-playground'
+        client = Client(space_id, hf_token=os.environ.get('HF_TOKEN') or None, verbose=False)
+        api = client.view_api(return_format='dict')
+        endpoints = api.get('named_endpoints', {}) if isinstance(api, dict) else {}
+        if not endpoints:
+            raise RuntimeError('Le Space ne publie aucun endpoint Gradio utilisable.')
+
+        # Lire la signature de l'API publiée au lieu de supposer un ordre de paramètres.
+        endpoint_name = next((name for name in endpoints if 'infer' in name.lower() or 'edit' in name.lower() or 'predict' in name.lower()), next(iter(endpoints)))
+        endpoint = endpoints[endpoint_name]
+        params = endpoint.get('parameters', [])
+        args = []
+        image_attached = False
+        for item in params:
+            name = str(item.get('parameter_name') or item.get('label') or '').lower()
+            typ = item.get('parameter_type') or {}
+            typ_name = str(typ.get('type') or typ.get('python_type') or '').lower()
+            label = str(item.get('label') or '').lower()
+            combined = name + ' ' + label
+            if any(k in combined for k in ('prompt', 'instruction', 'description', 'text')):
+                value = prompt
+            elif any(k in combined for k in ('image', 'photo', 'input', 'source', 'base')) and not image_attached:
+                if 'gallery' in typ_name or 'gallery' in str(typ).lower():
+                    value = [(handle_file(temp_path), None)]
+                else:
+                    value = handle_file(temp_path)
+                image_attached = True
+            elif 'seed' in combined:
+                value = 42
+            elif 'random' in combined:
+                value = True
+            elif 'width' in combined or 'height' in combined:
+                value = 1024
+            elif 'step' in combined:
+                value = 4
+            elif 'guidance' in combined or 'strength' in combined or 'intensity' in combined:
+                value = 0.75
+            elif 'mode' in combined or 'preset' in combined or 'quality' in combined:
+                choices = item.get('component', {}).get('choices') or item.get('choices') or []
+                value = choices[0][0] if choices and isinstance(choices[0], (list, tuple)) else (choices[0] if choices else None)
+            else:
+                # Valeur par défaut publiée par Gradio si disponible.
+                value = item.get('parameter_default')
+                if value is None:
+                    value = item.get('default')
+            args.append(value)
+
+        if not image_attached:
+            raise RuntimeError('La signature du Space ne contient aucun champ image reconnu.')
+        result = client.predict(*args, api_name=endpoint_name)
+        candidate = result
+        if isinstance(candidate, dict):
+            # Certaines APIs nomment leurs sorties, d'autres renvoient directement le fichier.
+            candidate = next((v for k, v in candidate.items() if any(s in str(k).lower() for s in ('image', 'result', 'output', 'file'))), next(iter(candidate.values()), None))
+        if isinstance(candidate, (list, tuple)):
+            candidate = next((v for v in candidate if v), None)
         if isinstance(candidate, dict):
             candidate = candidate.get('path') or candidate.get('name') or candidate.get('url')
-        if not candidate:
-            return jsonify(error='Le moteur photo n’a pas renvoyé d’image exploitable.'), 502
-        candidate = str(candidate)
-        if os.path.isfile(candidate):
-            output_path = candidate
-            return send_file(output_path, mimetype='image/png', as_attachment=True,
-                             download_name='motion-studio-transformee.png')
-        if candidate.startswith('https://'):
+        if isinstance(candidate, str) and os.path.isfile(candidate):
+            return send_file(candidate, mimetype='image/png', as_attachment=True, download_name='motion-studio-transformee.png')
+        if isinstance(candidate, str) and candidate.startswith('https://'):
             import requests
             response = requests.get(candidate, timeout=90)
             response.raise_for_status()
-            return send_file(__import__('io').BytesIO(response.content), mimetype='image/png',
-                             as_attachment=True, download_name='motion-studio-transformee.png')
-        return jsonify(error='Le moteur photo a renvoyé un format de résultat inattendu.'), 502
+            return send_file(__import__('io').BytesIO(response.content), mimetype='image/png', as_attachment=True, download_name='motion-studio-transformee.png')
+        raise RuntimeError('Réponse du Space non reconnue : ' + type(candidate).__name__)
     except Exception as exc:
-        app.logger.warning('FLUX.2 Klein image edit failed: %s: %s', type(exc).__name__, str(exc)[:250])
-        return jsonify(error='Le moteur photo gratuit est occupé, a atteint son quota ou a refusé cette consigne. Réessayez plus tard avec une transformation autorisée.'), 503
+        # Le détail reste dans les logs Render ; le client reçoit un message exploitable.
+        app.logger.exception('Image edit failed using FLUX Space')
+        detail = str(exc).lower()
+        if 'quota' in detail or 'zerogpu' in detail or 'limit' in detail:
+            return jsonify(error='Le quota GPU gratuit du moteur photo est atteint. Réessayez plus tard.'), 503
+        if 'queue' in detail or 'timeout' in detail or 'timed out' in detail:
+            return jsonify(error='Le moteur photo est en file d’attente ou a expiré. Réessayez dans quelques minutes.'), 503
+        return jsonify(error='Le moteur photo a échoué : ' + str(exc)[:220]), 503
     finally:
         if temp_path:
             try: os.remove(temp_path)
