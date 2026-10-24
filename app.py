@@ -193,10 +193,32 @@ def generate_video_api():
             try:
                 engine = Client(space_id, hf_token=os.environ.get('HF_TOKEN') or None)
                 if engine_kind == 'primary':
+                    # Signature vérifiée dans le Space Wan 2.2 : les 19 entrées
+                    # doivent être fournies dans l'ordre. Les anciens arguments
+                    # omettaient plusieurs paramètres et plaçaient des booléens
+                    # dans les champs de modèle d'upscaling, ce qui faisait échouer
+                    # la génération avant l'inférence.
                     result = engine.predict(
-                        handle_file(temp_path), None, motion_prompt, 4, "",
-                        seconds, 1, 1, 42, True, 5, "UniPCMultistep", 6.0, 16,
-                        False, True, api_name='/generate_video'
+                        handle_file(temp_path),  # input_image
+                        None,                     # last_image
+                        motion_prompt,            # prompt
+                        4,                        # steps
+                        "",                       # negative_prompt
+                        seconds,                  # duration_seconds
+                        1.0,                      # guidance_scale
+                        1.0,                      # guidance_scale_2
+                        42,                       # seed
+                        True,                     # randomize_seed
+                        5,                        # quality
+                        "UniPCMultistep",         # scheduler
+                        6.0,                      # flow_shift
+                        16,                       # frame_multiplier
+                        "4x-UltraSharp",          # upscale_model
+                        1.0,                      # upscale_factor
+                        True,                     # video_component
+                        False,                    # safe_mode
+                        True,                     # enable_safety_checker
+                        api_name='/generate_video'
                     )
                 else:
                     # API alternative Wan 2.2 : image, prompt, steps, negative prompt,
