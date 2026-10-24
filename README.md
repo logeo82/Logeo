@@ -11,11 +11,25 @@ Prototype photo-vers-vidéo à partir de l'ancien dépôt Logeo. L'interface est
 - Endpoint serveur `POST /api/generate-video`, limites de taille et délai entre générations.
 - Mode adulte désactivé.
 
-## Moteur vidéo
+## Moteurs IA gratuits utilisés
 
-Le prototype appelle le Space public [yuknassty/wan2-2-image-to-video](https://huggingface.co/spaces/yuknassty/wan2-2-image-to-video), basé sur Wan 2.2. Ce service externe peut être occupé, changer d'API, être mis hors ligne ou imposer des limites de quota. L'intégration doit être testée après déploiement.
+### Transformation photo — FLUX.2 Klein 4B
+- Space public : [black-forest-labs/FLUX.2-klein-4B](https://huggingface.co/spaces/black-forest-labs/FLUX.2-klein-4B).
+- API Gradio : `/infer`, appelée depuis le serveur avec `gradio_client`.
+- Licence des poids du modèle : Apache-2.0, selon la [fiche officielle du modèle](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B). Cela ne remplace pas la vérification des conditions du Space public utilisé pour l'inférence.
 
-**Confidentialité :** lorsqu'une génération est lancée, la photo et le prompt sont transmis au Space Hugging Face public pour traitement. N'envoyez pas de photo intime, sensible ou confidentielle. Vérifier les conditions d'utilisation et la licence du modèle avant tout usage commercial. Ce prototype ne doit pas être présenté comme un service de génération garanti ou illimité.
+### Photo vers vidéo — Wan 2.2
+- Moteur principal : [r3gm/wan2-2-fp8da-aoti-preview2](https://huggingface.co/spaces/r3gm/wan2-2-fp8da-aoti-preview2), API Gradio `/generate_video`.
+- Secours : [preSalesAIAutomation/imagetovideo](https://huggingface.co/spaces/preSalesAIAutomation/imagetovideo), API Gradio `/generate_video_sync`.
+- Les appels vidéo utilisent les paramètres documentés par la signature du moteur. Le moteur principal a été corrigé pour transmettre tous les paramètres attendus, dont le modèle d'upscaling, les options de sécurité et la durée.
+- La famille Wan 2.2 est publiée sous Apache-2.0 pour les variantes officielles mentionnées dans leur fiche de licence ; vérifier la fiche exacte du modèle utilisé et les conditions du Space avant tout usage commercial.
+
+### Limites réelles du gratuit
+Les Spaces ZeroGPU sont accessibles gratuitement, mais utilisent une infrastructure partagée et des quotas par utilisateur. La documentation Hugging Face indique actuellement un quota quotidien gratuit limité (par exemple, 5 minutes de GPU pour un compte gratuit), avec une file d'attente qui varie selon la demande. Ces limites peuvent évoluer. Render héberge uniquement le site/API de liaison : aucun GPU n'est hébergé sur l'ordinateur du propriétaire, et Render ne calcule pas lui-même les images ou vidéos.
+
+Le face swap vidéo n'est pas inclus dans la voie gratuite : l'endpoint existant dépend de MuAPI et d'une clé API dont l'utilisation peut être payante. Ne pas configurer cette clé si le budget doit rester à 0 €.
+
+**Confidentialité :** lors d'une génération, la photo et le prompt sont transmis au fournisseur du Space public pour traitement. N'envoyez pas de photo intime, sensible ou confidentielle. Les espaces publics peuvent modifier leur API, se mettre en veille, être saturés ou disparaître. Le service ne peut donc pas garantir des générations illimitées ni une disponibilité permanente.
 
 ## Configuration facultative du compte Hugging Face
 
